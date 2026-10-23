@@ -38,17 +38,28 @@ data class AuthConfig(
   val selectedDeviceId: Int? = null,
   val selectedDeviceName: String = "",
 ) {
+  val hasCloudCredentials: Boolean
+    get() =
+      cloudPublicKey.isNotBlank() &&
+        cloudPrivateKey.isNotBlank() &&
+        cloudToken.isNotBlank() &&
+        cloudTokenSecret.isNotBlank()
+
   val isAuthenticated: Boolean
     get() =
       when (connectionMode) {
-        ConnectionMode.LOCAL_ZNET -> localIp.isNotBlank() && localBearerToken.isNotBlank()
-        ConnectionMode.TELLDUS_CLOUD ->
-          cloudPublicKey.isNotBlank() &&
-            cloudPrivateKey.isNotBlank() &&
-            cloudToken.isNotBlank() &&
-            cloudTokenSecret.isNotBlank()
+        ConnectionMode.LOCAL_ZNET ->
+          (localIp.isNotBlank() && localBearerToken.isNotBlank()) || hasCloudCredentials
+        ConnectionMode.TELLDUS_CLOUD -> hasCloudCredentials
       }
 }
+
+data class TelldusCloudKeys(
+  val publicKey: String,
+  val privateKey: String,
+  val token: String,
+  val tokenSecret: String,
+)
 
 data class DiscoveredTellStick(
   val ipAddress: String,
@@ -76,6 +87,8 @@ data class TelldusDevice(
   val stateValue: String? = null,
   val methods: Int = TelldusMethods.TURNON or TelldusMethods.TURNOFF,
   val type: String = "device",
+  val clientDeviceId: Int? = null,
+  val clientName: String? = null,
 ) {
   val isOn: Boolean
     get() = state == TelldusMethods.TURNON
@@ -137,7 +150,13 @@ object HeaterScheduleCalculator {
       if (readyMinutesOfDay + config.autoOffOffsetMinutes >= 24 * 60) 1 else 0
 
     // Determine effective ready weekdays (1=Monday .. 7=Sunday)
-    val nextReadyDateTime = computeNextReadyDateTime(readyTime, config.activeWeekdays, now)
+    val nextReadyDateTime =
+      computeNextReadyDateTime(
+        readyTime = readyTime,
+        autoOffOffsetMinutes = config.autoOffOffsetMinutes,
+        activeWeekdays = config.activeWeekdays,
+        now = now,
+      )
     val effectiveReadyWeekdays: Set<Int> =
       if (config.activeWeekdays.isNotEmpty()) {
         config.activeWeekdays
@@ -176,12 +195,14 @@ object HeaterScheduleCalculator {
 
   private fun computeNextReadyDateTime(
     readyTime: LocalTime,
+    autoOffOffsetMinutes: Int,
     activeWeekdays: Set<Int>,
     now: LocalDateTime,
   ): LocalDateTime {
     var candidate = now.toLocalDate().atTime(readyTime)
-    // If today's ready time has already passed, start checking from tomorrow
-    if (!candidate.isAfter(now)) {
+    // Keep today's occurrence active until its auto-off time has passed
+    val candidateStop = candidate.plusMinutes(autoOffOffsetMinutes.toLong())
+    if (!candidateStop.isAfter(now)) {
       candidate = candidate.plusDays(1)
     }
     if (activeWeekdays.isEmpty()) {
