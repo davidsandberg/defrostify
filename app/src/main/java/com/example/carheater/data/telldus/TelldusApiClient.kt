@@ -27,7 +27,8 @@ class TelldusApiException(
   message: String,
   val httpCode: Int? = null,
   val rawBody: String? = null,
-) : Exception(message)
+  cause: Throwable? = null,
+) : Exception(message, cause)
 
 class TelldusApiClient {
 
@@ -190,15 +191,20 @@ class TelldusApiClient {
         if ((methods and (TelldusMethods.TURNON or TelldusMethods.TURNOFF)) == 0) {
           continue
         }
+        val id = obj.optInt("id")
+        val clientDeviceId = obj.optString("clientDeviceId", "").toIntOrNull()
+        if (id > 0 && clientDeviceId != null && clientDeviceId > 0) {
+          registerDeviceMapping(localId = clientDeviceId, cloudId = id)
+        }
         devices.add(
           TelldusDevice(
-            id = obj.optInt("id"),
-            name = obj.optString("name", "Device #${obj.optInt("id")}"),
+            id = id,
+            name = obj.optString("name", "Device #${id}"),
             state = obj.optInt("state", TelldusMethods.TURNOFF),
             stateValue = obj.optString("statevalue", "").ifBlank { null },
             methods = methods,
             type = obj.optString("type", "device"),
-            clientDeviceId = obj.optString("clientDeviceId", "").toIntOrNull(),
+            clientDeviceId = clientDeviceId,
             clientName = obj.optString("clientName", "").ifBlank { null },
           )
         )
@@ -208,51 +214,17 @@ class TelldusApiClient {
 
   /**
    * Resolves a local ZNet device ID (e.g. `31` for "Switch" or `111` for "Belysning Pergola")
-   * to its Telldus Live Cloud device ID (e.g. `7293259` or `17070039`) by matching `clientDeviceId`
-   * (and `selectedDeviceName` if multiple locations exist on the account).
+   * to its Telldus Live Cloud device ID (e.g. `7293259` or `17070039`).
    */
   suspend fun resolveCloudDeviceId(auth: AuthConfig, deviceId: Int): Int =
     withContext(Dispatchers.IO) {
-      // Cloud IDs are large (> 100,000), whereas ZNet local IDs are small (1..999).
-      if (deviceId >= 100_000 || !auth.hasCloudCredentials) {
-        return@withContext deviceId
-      }
-      val preferredName = auth.selectedDeviceName.trim()
-      val specificKey = "$deviceId:${preferredName.lowercase()}"
-      val genericKey = "$deviceId:*"
-      cloudDeviceIdCache[specificKey]?.let { return@withContext it }
-      cloudDeviceIdCache[genericKey]?.let { return@withContext it }
+      if (deviceId >= 100_000) return@withContext deviceId
+      val mapped = toCloudDeviceId(deviceId)
+      if (mapped != deviceId) return@withContext mapped
+      if (!auth.hasCloudCredentials) return@withContext deviceId
 
-      val supportedMethods =
-        TelldusMethods.TURNON or TelldusMethods.TURNOFF or TelldusMethods.DIM
-      val responseText =
-        callCloudEndpoint(
-          auth = auth,
-          path = "devices/list",
-          queryParams = mapOf("supportedMethods" to supportedMethods.toString()),
-        )
-      val json = JSONObject(responseText)
-      checkForApiError(json, responseText)
-      val deviceArray = json.optJSONArray("device") ?: JSONArray()
-      var fallbackMatch: Int? = null
-      for (i in 0 until deviceArray.length()) {
-        val obj = deviceArray.optJSONObject(i) ?: continue
-        val cloudId = obj.optInt("id", 0)
-        val clientDevId = obj.optString("clientDeviceId", "").toIntOrNull()
-        val name = obj.optString("name", "").trim()
-        if (clientDevId != null && cloudId > 0) {
-          cloudDeviceIdCache["$clientDevId:${name.lowercase()}"] = cloudId
-          cloudDeviceIdCache.putIfAbsent("$clientDevId:*", cloudId)
-          if (clientDevId == deviceId) {
-            if (preferredName.isNotEmpty() && name.equals(preferredName, ignoreCase = true)) {
-              fallbackMatch = cloudId
-            } else if (fallbackMatch == null) {
-              fallbackMatch = cloudId
-            }
-          }
-        }
-      }
-      fallbackMatch ?: deviceId
+      runCatching { listDevices(auth) }
+      toCloudDeviceId(deviceId)
     }
 
   /**
@@ -263,32 +235,15 @@ class TelldusApiClient {
       val supportedMethods =
         TelldusMethods.TURNON or TelldusMethods.TURNOFF or TelldusMethods.DIM
       val responseText =
-        try {
-          callTelldusEndpoint(
-            auth = auth,
-            path = "device/info",
-            queryParams =
-              mapOf(
-                "id" to deviceId.toString(),
-                "supportedMethods" to supportedMethods.toString(),
-              ),
-          )
-        } catch (e: TelldusApiException) {
-          if (auth.connectionMode == ConnectionMode.LOCAL_ZNET && auth.hasCloudCredentials) {
-            val cloudId = resolveCloudDeviceId(auth, deviceId)
-            callCloudEndpoint(
-              auth = auth,
-              path = "device/info",
-              queryParams =
-                mapOf(
-                  "id" to cloudId.toString(),
-                  "supportedMethods" to supportedMethods.toString(),
-                ),
-            )
-          } else {
-            throw e
-          }
-        }
+        callTelldusEndpoint(
+          auth = auth,
+          path = "device/info",
+          queryParams =
+            mapOf(
+              "id" to deviceId.toString(),
+              "supportedMethods" to supportedMethods.toString(),
+            ),
+        )
       val obj = JSONObject(responseText)
       checkForApiError(obj, responseText)
       TelldusDevice(
@@ -298,6 +253,8 @@ class TelldusApiClient {
         stateValue = obj.optString("statevalue", "").ifBlank { null },
         methods = obj.optInt("methods", TelldusMethods.TURNON or TelldusMethods.TURNOFF),
         type = obj.optString("type", "device"),
+        clientDeviceId = obj.optString("clientDeviceId", "").toIntOrNull() ?: toLocalDeviceId(deviceId),
+        clientName = obj.optString("clientName", "").ifBlank { null },
       )
     }
 
@@ -312,9 +269,12 @@ class TelldusApiClient {
     deviceName: String = auth.selectedDeviceName,
   ): Double? =
     withContext(Dispatchers.IO) {
+      val localId = toLocalDeviceId(deviceId)
+      val cloudId = toCloudDeviceId(deviceId)
       if (auth.connectionMode == ConnectionMode.LOCAL_ZNET &&
         auth.localIp.isNotBlank() &&
-        auth.localBearerToken.isNotBlank()
+        auth.localBearerToken.isNotBlank() &&
+        isLocalReachable()
       ) {
         val localWatts =
           runCatching {
@@ -322,10 +282,11 @@ class TelldusApiClient {
               callLocalZNetEndpoint(
                 auth = auth,
                 path = "sensor/info",
-                queryParams = mapOf("id" to deviceId.toString()),
+                queryParams = mapOf("id" to localId.toString()),
               )
             val obj = JSONObject(responseText)
             checkForApiError(obj, responseText)
+            markLocalSucceeded()
             extractWattScale2(obj.optJSONArray("data"))
           }.getOrNull()
         if (localWatts != null) {
@@ -334,6 +295,11 @@ class TelldusApiClient {
       }
 
       if (auth.hasCloudCredentials) {
+        val now = System.currentTimeMillis()
+        val cached = cachedCloudWattMap[deviceId] ?: cachedCloudWattMap[cloudId]
+        if (cached != null && (now - cached.first < 60_000L)) {
+          return@withContext cached.second
+        }
         runCatching {
           val responseText =
             callCloudEndpoint(
@@ -345,20 +311,29 @@ class TelldusApiClient {
           checkForApiError(obj, responseText)
           val sensors = obj.optJSONArray("sensor") ?: JSONArray()
           val trimmedName = deviceName.trim()
+          var resultWatt: Double? = null
           for (i in 0 until sensors.length()) {
             val s = sensors.optJSONObject(i) ?: continue
             val sensorLocalId = s.optString("sensorId", "").toIntOrNull()
             val sensorCloudId = s.optInt("id", 0)
             val sName = s.optString("name", "").trim()
-            val idMatches = sensorLocalId == deviceId || sensorCloudId == deviceId
+            val idMatches = (cloudId > 0 && sensorCloudId == cloudId) ||
+              (localId > 0 && sensorLocalId == localId)
             val nameMatches =
               trimmedName.isNotEmpty() && sName.equals(trimmedName, ignoreCase = true)
             if (idMatches || nameMatches) {
               val w = extractWattScale2(s.optJSONArray("data"))
-              if (w != null) return@runCatching w
+              if (w != null) {
+                resultWatt = w
+                break
+              }
             }
           }
-          null
+          if (resultWatt != null) {
+            cachedCloudWattMap[deviceId] = Pair(now, resultWatt)
+            cachedCloudWattMap[cloudId] = Pair(now, resultWatt)
+          }
+          resultWatt
         }.getOrNull()
       } else {
         null
@@ -385,24 +360,11 @@ class TelldusApiClient {
   suspend fun turnOnDevice(auth: AuthConfig, deviceId: Int): String =
     withContext(Dispatchers.IO) {
       val responseText =
-        try {
-          callTelldusEndpoint(
-            auth = auth,
-            path = "device/turnOn",
-            queryParams = mapOf("id" to deviceId.toString()),
-          )
-        } catch (e: TelldusApiException) {
-          if (auth.connectionMode == ConnectionMode.LOCAL_ZNET && auth.hasCloudCredentials) {
-            val cloudId = resolveCloudDeviceId(auth, deviceId)
-            callCloudEndpoint(
-              auth = auth,
-              path = "device/turnOn",
-              queryParams = mapOf("id" to cloudId.toString()),
-            )
-          } else {
-            throw e
-          }
-        }
+        callTelldusEndpoint(
+          auth = auth,
+          path = "device/turnOn",
+          queryParams = mapOf("id" to deviceId.toString()),
+        )
       val json = JSONObject(responseText)
       checkForApiError(json, responseText)
       val status = json.optString("status", "success")
@@ -418,24 +380,11 @@ class TelldusApiClient {
   suspend fun turnOffDevice(auth: AuthConfig, deviceId: Int): String =
     withContext(Dispatchers.IO) {
       val responseText =
-        try {
-          callTelldusEndpoint(
-            auth = auth,
-            path = "device/turnOff",
-            queryParams = mapOf("id" to deviceId.toString()),
-          )
-        } catch (e: TelldusApiException) {
-          if (auth.connectionMode == ConnectionMode.LOCAL_ZNET && auth.hasCloudCredentials) {
-            val cloudId = resolveCloudDeviceId(auth, deviceId)
-            callCloudEndpoint(
-              auth = auth,
-              path = "device/turnOff",
-              queryParams = mapOf("id" to cloudId.toString()),
-            )
-          } else {
-            throw e
-          }
-        }
+        callTelldusEndpoint(
+          auth = auth,
+          path = "device/turnOff",
+          queryParams = mapOf("id" to deviceId.toString()),
+        )
       val json = JSONObject(responseText)
       checkForApiError(json, responseText)
       val status = json.optString("status", "success")
@@ -476,13 +425,13 @@ class TelldusApiClient {
     }
 
   /**
-   * Creates or updates a scheduled job on the Telldus / ZNet scheduler (`/scheduler/setJob`).
-   * Automatically resolves local ZNet `clientDeviceId` (e.g. `31`) to Telldus Cloud `id` (e.g. `7293259`).
+   * Creates or updates a scheduled job on the Telldus scheduler (`/scheduler/setJob`).
+   * Automatically resolves device IDs to Telldus Cloud `id`.
    * Returns the saved job ID.
    */
   suspend fun setScheduleJob(auth: AuthConfig, job: TelldusScheduleJob): Int =
     withContext(Dispatchers.IO) {
-      val targetDeviceId = resolveCloudDeviceId(auth, job.deviceId)
+      val targetDeviceId = toCloudDeviceId(job.deviceId)
       val jobKey = "$targetDeviceId:${job.method}"
       val jobSignature =
         "${job.id}:$targetDeviceId:${job.method}:${job.hour}:${job.minute}:${job.weekdays}:${job.active}"
@@ -635,7 +584,7 @@ class TelldusApiClient {
     // directly to Telldus Live Cloud when Cloud credentials are available.
     if (path.startsWith("scheduler/")) {
       if (auth.hasCloudCredentials) {
-        return callCloudEndpoint(auth, path, queryParams)
+        return callCloudEndpoint(auth, path, mapParamsForCloud(queryParams))
       } else {
         throw TelldusApiException(
           "Telldus Cloud keys are required for controller scheduling. Open Switch & Auth -> Telldus Cloud -> Auto-Fetch Cloud Keys."
@@ -645,17 +594,28 @@ class TelldusApiClient {
 
     return when (auth.connectionMode) {
       ConnectionMode.LOCAL_ZNET -> {
-        try {
-          callLocalZNetEndpoint(auth, path, queryParams)
-        } catch (e: TelldusApiException) {
-          if (auth.hasCloudCredentials) {
-            callCloudEndpoint(auth, path, queryParams)
-          } else {
-            throw e
+        if (!isLocalReachable() && auth.hasCloudCredentials) {
+          // Fast-path to Cloud if local ZNet was recently unreachable
+          callCloudEndpoint(auth, path, mapParamsForCloud(queryParams))
+        } else {
+          try {
+            val res = callLocalZNetEndpoint(auth, path, mapParamsForLocal(queryParams))
+            val json = JSONObject(res)
+            checkForApiError(json, res)
+            markLocalSucceeded()
+            res
+          } catch (e: Exception) {
+            markLocalFailed()
+            if (auth.hasCloudCredentials) {
+              callCloudEndpoint(auth, path, mapParamsForCloud(queryParams))
+            } else {
+              if (e is TelldusApiException) throw e
+              else throw TelldusApiException("Local ZNet request failed: ${e.message}", cause = e)
+            }
           }
         }
       }
-      ConnectionMode.TELLDUS_CLOUD -> callCloudEndpoint(auth, path, queryParams)
+      ConnectionMode.TELLDUS_CLOUD -> callCloudEndpoint(auth, path, mapParamsForCloud(queryParams))
     }
   }
 
@@ -685,6 +645,8 @@ class TelldusApiClient {
       url = fullUrl,
       method = "GET",
       headers = mapOf("Authorization" to "Bearer ${auth.localBearerToken.trim()}"),
+      connectTimeoutMs = 1200,
+      readTimeoutMs = 2500,
     )
   }
 
@@ -707,8 +669,8 @@ class TelldusApiClient {
 
     return cloudRateLimitMutex.withLock {
       var lastError: TelldusApiException? = null
-      val minIntervalMs = if (path.startsWith("scheduler/setJob")) 5800L else 800L
-      val backoffDelaysMs = longArrayOf(8_000L, 14_000L, 20_000L)
+      val minIntervalMs = if (path.startsWith("scheduler/setJob")) 5800L else 1200L
+      val backoffDelaysMs = longArrayOf(6_000L, 12_000L, 20_000L)
       for (attempt in 1..4) {
         val now = System.currentTimeMillis()
         val elapsed = now - lastCloudCallTimestampMs
@@ -734,19 +696,13 @@ class TelldusApiClient {
               method = "GET",
               headers = mapOf("Authorization" to oauthHeader),
             )
-          if (responseText.contains("too many requests", ignoreCase = true)) {
-            if (attempt <= backoffDelaysMs.size) {
-              delay(backoffDelaysMs[attempt - 1])
-              lastCloudCallTimestampMs = System.currentTimeMillis()
-              continue
-            }
-          }
           return@withLock responseText
         } catch (e: TelldusApiException) {
           lastError = e
-          if ((e.httpCode == 429 || e.message?.contains("too many requests", ignoreCase = true) == true) &&
-            attempt <= backoffDelaysMs.size
-          ) {
+          val isRateLimited = e.httpCode == 429 ||
+            e.message?.contains("429", ignoreCase = true) == true ||
+            e.message?.contains("too many requests", ignoreCase = true) == true
+          if (isRateLimited && attempt <= backoffDelaysMs.size) {
             delay(backoffDelaysMs[attempt - 1])
             lastCloudCallTimestampMs = System.currentTimeMillis()
             continue
@@ -754,7 +710,7 @@ class TelldusApiClient {
           throw e
         }
       }
-      throw lastError ?: TelldusApiException("Failed calling $fullUrl after retries")
+      throw lastError ?: TelldusApiException("Cloud API request failed after retries")
     }
   }
 
@@ -809,12 +765,14 @@ class TelldusApiClient {
     method: String = "GET",
     headers: Map<String, String> = emptyMap(),
     body: String? = null,
+    connectTimeoutMs: Int = 8000,
+    readTimeoutMs: Int = 8000,
   ): String {
     val connection = (URL(url).openConnection() as HttpURLConnection)
     try {
       connection.requestMethod = method
-      connection.connectTimeout = 8000
-      connection.readTimeout = 8000
+      connection.connectTimeout = connectTimeoutMs
+      connection.readTimeout = readTimeoutMs
       connection.setRequestProperty("Accept", "application/json")
       headers.forEach { (k, v) -> connection.setRequestProperty(k, v) }
 
@@ -864,20 +822,76 @@ class TelldusApiClient {
   }
 
   companion object {
-    private val cloudDeviceIdCache =
-      java.util.concurrent.ConcurrentHashMap<String, Int>().apply {
-        put("31:switch", 7293259)
-        put("31:*", 7293259)
-        put("111:belysning pergola", 17070039)
-        put("111:*", 17070039)
-        put("46:*", 13648343)
-        put("48:*", 13812098)
-        put("52:*", 14003984)
+    private val localToCloudMap =
+      java.util.concurrent.ConcurrentHashMap<Int, Int>().apply {
+        put(111, 17070039)
+        put(31, 7293259)
+        put(46, 13648343)
+        put(48, 13812098)
+        put(52, 14003984)
       }
+    private val cloudToLocalMap =
+      java.util.concurrent.ConcurrentHashMap<Int, Int>().apply {
+        put(17070039, 111)
+        put(7293259, 31)
+        put(13648343, 46)
+        put(13812098, 48)
+        put(14003984, 52)
+      }
+
+    fun toLocalDeviceId(id: Int): Int {
+      if (id < 100_000) return id
+      return cloudToLocalMap[id] ?: id
+    }
+
+    fun toCloudDeviceId(id: Int): Int {
+      if (id >= 100_000) return id
+      return localToCloudMap[id] ?: id
+    }
+
+    fun registerDeviceMapping(localId: Int, cloudId: Int) {
+      if (localId > 0 && cloudId > 0) {
+        localToCloudMap[localId] = cloudId
+        cloudToLocalMap[cloudId] = localId
+      }
+    }
+
+    fun mapParamsForLocal(queryParams: Map<String, String>): Map<String, String> {
+      if (!queryParams.containsKey("id") && !queryParams.containsKey("deviceId")) return queryParams
+      val mapped = queryParams.toMutableMap()
+      queryParams["id"]?.toIntOrNull()?.let { mapped["id"] = toLocalDeviceId(it).toString() }
+      queryParams["deviceId"]?.toIntOrNull()?.let { mapped["deviceId"] = toLocalDeviceId(it).toString() }
+      return mapped
+    }
+
+    fun mapParamsForCloud(queryParams: Map<String, String>): Map<String, String> {
+      if (!queryParams.containsKey("id") && !queryParams.containsKey("deviceId")) return queryParams
+      val mapped = queryParams.toMutableMap()
+      queryParams["id"]?.toIntOrNull()?.let { mapped["id"] = toCloudDeviceId(it).toString() }
+      queryParams["deviceId"]?.toIntOrNull()?.let { mapped["deviceId"] = toCloudDeviceId(it).toString() }
+      return mapped
+    }
+
     private val lastSyncedJobSignatureCache =
       java.util.concurrent.ConcurrentHashMap<String, String>()
     private val cloudRateLimitMutex = Mutex()
     @Volatile private var lastCloudCallTimestampMs: Long = 0L
+    @Volatile private var lastLocalFailureTimestampMs: Long = 0L
+    private val cachedCloudWattMap = java.util.concurrent.ConcurrentHashMap<Int, Pair<Long, Double>>()
+
+    fun isLocalReachable(): Boolean {
+      val now = System.currentTimeMillis()
+      val lastFailure = lastLocalFailureTimestampMs
+      return lastFailure == 0L || (now - lastFailure > 60_000L)
+    }
+
+    fun markLocalFailed() {
+      lastLocalFailureTimestampMs = System.currentTimeMillis()
+    }
+
+    fun markLocalSucceeded() {
+      lastLocalFailureTimestampMs = 0L
+    }
 
     fun normalizeLocalBaseUrl(rawIp: String): String {
       val trimmed = rawIp.trim().removeSuffix("/")

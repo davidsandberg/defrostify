@@ -297,34 +297,14 @@ class MainScreenViewModel(
     statusPollJob =
       viewModelScope.launch {
         while (true) {
-          delay(5000L)
+          // When on local Wi-Fi, poll every 5s.
+          // When remote (Cloud), poll every 120s to strictly avoid hitting Telldus Cloud's 429 rate limit.
+          val intervalMs = if (TelldusApiClient.isLocalReachable()) 5000L else 120_000L
+          delay(intervalMs)
           val current = _uiState.value
           val auth = current.authConfig
           val deviceId = auth.selectedDeviceId
           if (auth.isAuthenticated && deviceId != null) {
-            if (current.scheduleConfig.enabled) {
-              val window = current.heatingWindow
-              val nowTime = java.time.LocalTime.now()
-              val onKey = "ON:${nowTime.hour}:${nowTime.minute}"
-              val offKey = "OFF:${nowTime.hour}:${nowTime.minute}"
-              if (nowTime.hour == window.startTime.hour &&
-                nowTime.minute == window.startTime.minute &&
-                lastLocalTriggerKey != onKey
-              ) {
-                lastLocalTriggerKey = onKey
-                if (current.isHeaterOn != true) {
-                  runCatching { apiClient.turnOnDevice(auth, deviceId) }
-                }
-              } else if (nowTime.hour == window.stopTime.hour &&
-                nowTime.minute == window.stopTime.minute &&
-                lastLocalTriggerKey != offKey
-              ) {
-                lastLocalTriggerKey = offKey
-                if (current.isHeaterOn != false) {
-                  runCatching { apiClient.turnOffDevice(auth, deviceId) }
-                }
-              }
-            }
             refreshSwitchState(silent = true)
           } else {
             _uiState.update {
@@ -435,7 +415,13 @@ class MainScreenViewModel(
       }
       runCatching {
         val device = apiClient.getDeviceInfo(auth, deviceId)
-        val watts = apiClient.getDevicePowerWatts(auth, deviceId, device.name)
+        // Only fetch wattage sensor if local is reachable or explicitly requested (not silent)
+        val watts =
+          if (TelldusApiClient.isLocalReachable() || !silent) {
+            apiClient.getDevicePowerWatts(auth, deviceId, device.name)
+          } else {
+            _uiState.value.powerWatts
+          }
         device to watts
       }
         .onSuccess { (device, watts) ->
@@ -475,6 +461,9 @@ class MainScreenViewModel(
       return
     }
 
+    // Temporarily pause background polling so user action gets immediate priority and mutex lock
+    statusPollJob?.cancel()
+
     viewModelScope.launch {
       val actionLabel = if (turnOn) "Starting heater (turnOn)..." else "Stopping heater (turnOff)..."
       _uiState.update {
@@ -501,13 +490,15 @@ class MainScreenViewModel(
                 else "Heater turned OFF (${auth.selectedDeviceName}).",
             )
           }
-          // Verify actual Z-Wave ACK state and updated wattmeter report shortly after command
-          delay(1200L)
-          refreshSwitchState(silent = true)
-          delay(2000L)
+          // Resume background polling
+          startStatusPolling()
+          // Over Cloud, wait slightly longer and verify device state
+          val delayMs = if (TelldusApiClient.isLocalReachable()) 1500L else 4000L
+          delay(delayMs)
           refreshSwitchState(silent = true)
         }
         .onFailure { err ->
+          startStatusPolling()
           _uiState.update {
             it.copy(
               isBusy = false,
@@ -660,6 +651,7 @@ class MainScreenViewModel(
     }
 
     activeSyncJob?.cancel()
+    statusPollJob?.cancel()
     activeSyncJob =
       viewModelScope.launch {
         _uiState.update {
@@ -721,9 +713,10 @@ class MainScreenViewModel(
             active = config.enabled,
           )
         val savedOffId = apiClient.setScheduleJob(auth, offJob)
-        Pair(savedOnId, savedOffId)
+        savedOnId to savedOffId
       }
         .onSuccess { (savedOnId, savedOffId) ->
+          startStatusPolling()
           val updatedSchedule =
             config.copy(
               turnOnJobId = savedOnId.takeIf { it > 0 } ?: config.turnOnJobId,
@@ -754,17 +747,19 @@ class MainScreenViewModel(
           }
         }
         .onFailure { err ->
+          startStatusPolling()
           if (err is kotlinx.coroutines.CancellationException) return@onFailure
-          if (err.message?.contains("too many requests", ignoreCase = true) == true) {
+          if (err.message?.contains("too many requests", ignoreCase = true) == true ||
+            err.message?.contains("429", ignoreCase = true) == true
+          ) {
             _uiState.update {
               it.copy(
                 isBusy = false,
-                isSyncingSchedule = true,
+                isSyncingSchedule = false,
                 errorMessage = null,
-                statusMessage = "Schedule active locally — queued for TellStick cloud sync...",
+                statusMessage = "Schedule saved locally. Telldus Cloud rate limit reached — retry in a few minutes.",
               )
             }
-            debouncedSyncSchedule(delayMs = 15_000L)
             return@onFailure
           }
           _uiState.update {
