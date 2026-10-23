@@ -2,7 +2,7 @@
 
 ## Core Functionality & Verification
 - [x] **Verify that the timer/schedule works**
-- [ ] **Verify that it works both locally (Wi-Fi) and remotely (Telldus Live Cloud)**
+- [x] **Verify that it works both locally (Wi-Fi) and remotely (Telldus Live Cloud)**
 - [ ] **Test on another phone**
 
 ## UI & User Experience
