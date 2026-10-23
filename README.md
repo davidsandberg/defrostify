@@ -1,27 +1,48 @@
 # Defrostify ❄️🚗🔥
 
-**Defrostify** is a native Android application (built with **Kotlin** and **Jetpack Compose**) for controlling and scheduling an electric car heater connected to a smart Z-Wave switch (such as a Fibaro Wall Plug) via a **Telldus TellStick ZNet Lite v2** controller.
+**Defrostify** is a native Android application (built with **Kotlin** and **Jetpack Compose**) for controlling and scheduling an electric car heater connected to a smart Z-Wave switch via a **Telldus TellStick ZNet Lite v2** controller.
 
-Instead of manually calculating when to turn on the heater, you simply pick **when the car should be warm** using a Samsung One UI alarm-style scroll wheel, and Defrostify automatically computes and syncs the pre-heat start time and auto-off safety timer to your TellStick controller.
+Instead of manually calculating when to turn on the heater, you simply pick **when the car should be warm** using a Samsung One UI alarm-style scroll wheel, and Defrostify automatically computes and syncs the pre-heat start time and auto-off safety timer directly to your TellStick controller for autonomous execution.
+
+---
+
+## 🔌 Hardware & The Switch
+
+Defrostify is designed to control high-power electric engine and cabin heaters (typically 1200W–2000W) in winter climates.
+
+### Supported Smart Switch: [FIBARO Wall Plug (Z-Wave)](https://www.fibaro.com/en/products/wall-plug/)
+A prime choice of switch for this setup is the **[FIBARO Wall Plug](https://www.fibaro.com/en/products/wall-plug/)** (Z-Wave):
+- **High Power Capacity:** Rated for resistive loads up to 2,500W (continuous 11A at 230V), making it well-suited for heavy electric car cabin fan heaters and engine block heaters.
+- **Integrated Power Metering:** Continuously measures active power draw (in Watts) and accumulated energy consumption (in kWh). Defrostify reads this telemetry to display real-time power draw on the home screen.
+- **Connection Verification:** Showing live wattage (`W`) immediately reveals whether the heater cable is physically connected to the car and drawing power (e.g., ~1400W vs 0W), preventing situations where the switch is on but the plug came loose or the cabin heater was switched off.
+- **Z-Wave Mesh Reliability:** Communicates through the Z-Wave mesh network back to the TellStick ZNet hub, ensuring reliable command transmission and acknowledgments even outside or near driveways.
 
 ---
 
 ## ✨ Key Features
 
-- **Departure-Time Scheduling ("When Car Should Be Warm")**
-  - Dual 24-hour scroll wheels with haptic feedback and quick morning preset chips (`06:30`, `07:00`, `07:30`, `08:00`).
-  - Automatic calculation of **Heater ON** (`readyTime - preHeatMinutes`) and **Auto-OFF** (`readyTime + autoOffOffsetMinutes`), including automatic weekday shifting if the pre-heat window crosses midnight.
+- **Departure-Time Scheduling ("Schedule")**
+  - Dual 24-hour scroll wheels with haptic feedback and snap-to-item mechanics.
+  - Automatic calculation of **Heater ON** (`readyTime - preHeatMinutes`) and **Auto-OFF** (`readyTime + autoOffOffsetMinutes`), with automatic weekday shifting when the pre-heat window crosses midnight.
   - Supports single next-occurrence scheduling or repeating weekday schedules (`Mon`–`Sun`).
-- **Direct Heater Control & Live Status**
-  - Instant one-tap **START HEATER** and **STOP HEATER** controls.
-  - Live **`● ON` / `○ OFF`** status badge in the header with automatic 5-second background polling so external changes (e.g., physical switch button or scheduled triggers) are reflected automatically.
+  - Autonomously executes on the TellStick ZNet controller even if the phone is offline, in flight mode, or turned off.
+- **Live Power Consumption (`W`) & Switch Status**
+  - Live status badge in the header displaying both power state and instantaneous wattage (e.g. **`● ON · 1420 W`** or **`○ OFF · 0 W`**).
+  - Verifies that the heater element is actively drawing electricity and heating the vehicle.
+  - Automatic 5-second background polling keeps the UI in sync with manual switch toggles or scheduled triggers.
+- **Direct Control**
+  - Quick-access **`● ON`** and **`○ OFF`** buttons for manual pre-heating without configuring a schedule.
+  - Verifies hardware acknowledgments before updating state, avoiding false-positive indicators if a switch is unplugged or unreachable.
 - **Hybrid Local LAN + Telldus Live Cloud Architecture**
-  - **Local ZNet Lite v2 HTTP API (`/api/...`)**: Ultra-fast, low-latency direct control (`device/turnOn`, `device/turnOff`, `device/info`, `devices/list`) over local Wi-Fi with UDP LAN auto-discovery on port `30303`.
-  - **Telldus Live Cloud API (`https://pa-api.telldus.com/json/...`)**: Automatic fallback when away from home Wi-Fi, plus hardware controller schedule synchronization (`scheduler/setJob` & `scheduler/jobList`) with automatic local-to-cloud device ID resolution and coroutine-based rate-limit pacing.
+  - **Local ZNet Lite v2 HTTP API (`/api/...`)**: Ultra-fast, low-latency direct control (`device/turnOn`, `device/turnOff`, `device/info`, `sensor/info`, `devices/list`) over local Wi-Fi with UDP LAN auto-discovery on port `30303`.
+  - **Telldus Live Cloud API (`https://pa-api.telldus.com/json/...`)**: Seamless fallback when away from home Wi-Fi (e.g. over mobile data), plus hardware controller schedule synchronization (`scheduler/setJob` & `scheduler/jobList`) with automatic local-to-cloud device ID resolution and coroutine-based rate-limit pacing.
 - **Streamlined In-App Authentication (`⚙ Config`)**
   - Built-in two-step TellStick ZNet login and token exchange (`PUT /api/token` $\rightarrow$ `GET /api/token`).
   - Zero-copy-paste **Telldus Cloud OAuth 1.0a Key Auto-Fetch** directly from the authenticated session (`https://pa-api.telldus.com/keys/generatePrivate`).
-  - Configurable **Pre-heat time (before warm)** and **Auto-off timer (after warm)** with preset chips and custom minute inputs for easy testing and customization.
+  - Configurable **Pre-heat time (before warm)** and **Auto-off timer (after warm)** with preset chips and custom minute inputs for personalized warming curves.
+- **Custom Adaptive Icon**
+  - Designed specifically for cold winter mornings: glowing vehicle silhouette radiating warmth against icy geometric frost crystals.
+
 
 ---
 
