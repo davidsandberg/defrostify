@@ -381,8 +381,15 @@ private fun ScheduleConfigurationCard(
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.Bold,
           )
+          val scheduleSubtitle =
+            when {
+              state.isSyncingSchedule -> "⏳ Syncing schedule to TellStick..."
+              schedule.enabled ->
+                "${HeaterScheduleCalculator.formatCountdown(window.durationUntilStart)} · ✓ Synced"
+              else -> HeaterScheduleCalculator.formatCountdown(window.durationUntilStart)
+            }
           Text(
-            text = HeaterScheduleCalculator.formatCountdown(window.durationUntilStart),
+            text = scheduleSubtitle,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.primary,
             fontWeight = FontWeight.Medium,

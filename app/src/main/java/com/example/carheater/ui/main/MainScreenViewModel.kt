@@ -29,6 +29,7 @@ data class HeaterUiState(
   val availableDevices: List<TelldusDevice> = emptyList(),
   val discoveredTellSticks: List<DiscoveredTellStick> = emptyList(),
   val isBusy: Boolean = false,
+  val isSyncingSchedule: Boolean = false,
   val showAuthDialog: Boolean = false,
   val statusMessage: String? = null,
   val errorMessage: String? = null,
@@ -517,8 +518,9 @@ class MainScreenViewModel(
     }
   }
 
-  private fun debouncedSyncSchedule(delayMs: Long = 3000L) {
+  private fun debouncedSyncSchedule(delayMs: Long = 3500L) {
     autoSyncJob?.cancel()
+    _uiState.update { it.copy(isSyncingSchedule = true, errorMessage = null) }
     autoSyncJob =
       viewModelScope.launch {
         delay(delayMs)
@@ -644,7 +646,7 @@ class MainScreenViewModel(
       viewModelScope.launch {
         _uiState.update {
           it.copy(
-            isBusy = true,
+            isSyncingSchedule = true,
             statusMessage =
               "Syncing schedule to controller (ON %02d:%02d, OFF %02d:%02d)..."
                 .format(
@@ -713,6 +715,7 @@ class MainScreenViewModel(
           _uiState.update {
             it.copy(
               isBusy = false,
+              isSyncingSchedule = false,
               scheduleConfig = updatedSchedule,
               heatingWindow = window,
               statusMessage =
@@ -738,16 +741,18 @@ class MainScreenViewModel(
             _uiState.update {
               it.copy(
                 isBusy = false,
+                isSyncingSchedule = true,
                 errorMessage = null,
                 statusMessage = "Schedule active locally — queued for TellStick cloud sync...",
               )
             }
-            debouncedSyncSchedule(delayMs = 25_000L)
+            debouncedSyncSchedule(delayMs = 15_000L)
             return@onFailure
           }
           _uiState.update {
             it.copy(
               isBusy = false,
+              isSyncingSchedule = false,
               errorMessage = "Failed to sync schedule to TellStick (${err.message}).",
             )
           }
