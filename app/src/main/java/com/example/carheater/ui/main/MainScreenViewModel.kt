@@ -12,6 +12,8 @@ import com.example.carheater.data.telldus.TelldusApiClient
 import com.example.carheater.data.telldus.TelldusDevice
 import com.example.carheater.data.telldus.TelldusMethods
 import com.example.carheater.data.telldus.TelldusScheduleJob
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -39,6 +41,10 @@ class MainScreenViewModel(
 
   private val _uiState = MutableStateFlow(HeaterUiState())
   val uiState: StateFlow<HeaterUiState> = _uiState.asStateFlow()
+  private var autoSyncJob: Job? = null
+  private var activeSyncJob: Job? = null
+  private var statusPollJob: Job? = null
+  private var lastLocalTriggerKey: String = ""
 
   init {
     val loadedAuth = storage?.loadAuthConfig() ?: AuthConfig()
@@ -53,6 +59,53 @@ class MainScreenViewModel(
     if (loadedAuth.isAuthenticated) {
       fetchDevices(loadedAuth)
     }
+    if (loadedAuth.localBearerToken.isNotBlank() && !loadedAuth.hasCloudCredentials) {
+      autoFetchCloudKeys(silent = true)
+    }
+  }
+
+  fun autoFetchCloudKeys(silent: Boolean = false) {
+    viewModelScope.launch {
+      if (!silent) {
+        _uiState.update {
+          it.copy(
+            isBusy = true,
+            statusMessage = "Auto-fetching Telldus Cloud keys from active login session...",
+            errorMessage = null,
+          )
+        }
+      }
+      val cloudKeys = apiClient.fetchCloudKeysFromWebViewSession()
+      if (cloudKeys != null) {
+        val updatedAuth =
+          _uiState.value.authConfig.copy(
+            cloudPublicKey = cloudKeys.publicKey,
+            cloudPrivateKey = cloudKeys.privateKey,
+            cloudToken = cloudKeys.token,
+            cloudTokenSecret = cloudKeys.tokenSecret,
+          )
+        storage?.saveAuthConfig(updatedAuth)
+        _uiState.update {
+          it.copy(
+            isBusy = false,
+            authConfig = updatedAuth,
+            statusMessage =
+              if (silent) it.statusMessage
+              else "Telldus Cloud keys configured automatically!",
+            errorMessage = null,
+          )
+        }
+        syncScheduleFromTelldus(silent = true)
+      } else if (!silent) {
+        _uiState.update {
+          it.copy(
+            isBusy = false,
+            errorMessage =
+              "Could not auto-fetch Cloud keys yet. Please sign in to TellStick ZNet first so your Telldus session is active.",
+          )
+        }
+      }
+    }
   }
 
   fun openAuthDialog() {
@@ -66,6 +119,9 @@ class MainScreenViewModel(
   fun updateAuthConfig(newConfig: AuthConfig) {
     storage?.saveAuthConfig(newConfig)
     _uiState.update { it.copy(authConfig = newConfig) }
+    if (_uiState.value.scheduleConfig.enabled) {
+      syncScheduleToTelldus()
+    }
   }
 
   fun scanLanForTellStick() {
@@ -175,11 +231,16 @@ class MainScreenViewModel(
       }
       runCatching { apiClient.exchangeLocalToken(auth.localIp, auth.pendingRequestToken) }
         .onSuccess { accessResp ->
+          val cloudKeys = apiClient.fetchCloudKeysFromWebViewSession()
           val updatedAuth =
             auth.copy(
               localBearerToken = accessResp.token,
               pendingRequestToken = "",
               pendingAuthUrl = "",
+              cloudPublicKey = cloudKeys?.publicKey ?: auth.cloudPublicKey,
+              cloudPrivateKey = cloudKeys?.privateKey ?: auth.cloudPrivateKey,
+              cloudToken = cloudKeys?.token ?: auth.cloudToken,
+              cloudTokenSecret = cloudKeys?.tokenSecret ?: auth.cloudTokenSecret,
             )
           storage?.saveAuthConfig(updatedAuth)
           _uiState.update {
@@ -221,6 +282,55 @@ class MainScreenViewModel(
         it.copy(heatingWindow = HeaterScheduleCalculator.calculate(it.scheduleConfig))
       }
     }
+    startStatusPolling()
+  }
+
+  fun onAppPaused() {
+    statusPollJob?.cancel()
+    statusPollJob = null
+  }
+
+  private fun startStatusPolling() {
+    statusPollJob?.cancel()
+    statusPollJob =
+      viewModelScope.launch {
+        while (true) {
+          delay(5000L)
+          val current = _uiState.value
+          val auth = current.authConfig
+          val deviceId = auth.selectedDeviceId
+          if (auth.isAuthenticated && deviceId != null) {
+            if (current.scheduleConfig.enabled) {
+              val window = current.heatingWindow
+              val nowTime = java.time.LocalTime.now()
+              val onKey = "ON:${nowTime.hour}:${nowTime.minute}"
+              val offKey = "OFF:${nowTime.hour}:${nowTime.minute}"
+              if (nowTime.hour == window.startTime.hour &&
+                nowTime.minute == window.startTime.minute &&
+                lastLocalTriggerKey != onKey
+              ) {
+                lastLocalTriggerKey = onKey
+                if (current.isHeaterOn != true) {
+                  runCatching { apiClient.turnOnDevice(auth, deviceId) }
+                }
+              } else if (nowTime.hour == window.stopTime.hour &&
+                nowTime.minute == window.stopTime.minute &&
+                lastLocalTriggerKey != offKey
+              ) {
+                lastLocalTriggerKey = offKey
+                if (current.isHeaterOn != false) {
+                  runCatching { apiClient.turnOffDevice(auth, deviceId) }
+                }
+              }
+            }
+            refreshSwitchState(silent = true)
+          } else {
+            _uiState.update {
+              it.copy(heatingWindow = HeaterScheduleCalculator.calculate(it.scheduleConfig))
+            }
+          }
+        }
+      }
   }
 
   fun fetchDevices(authOverride: AuthConfig? = null) {
@@ -260,6 +370,12 @@ class MainScreenViewModel(
                 },
             )
           }
+          if (updatedAuth.hasCloudCredentials &&
+            updatedAuth.selectedDeviceId != null &&
+            _uiState.value.scheduleConfig.turnOnJobId == null
+          ) {
+            syncScheduleFromTelldus(silent = true)
+          }
         }
         .onFailure { err ->
           _uiState.update {
@@ -279,12 +395,23 @@ class MainScreenViewModel(
         selectedDeviceName = device.name,
       )
     storage?.saveAuthConfig(updatedAuth)
+    // Reset job IDs when switching to a different device so we don't overwrite another switch's job
+    val resetSchedule =
+      _uiState.value.scheduleConfig.copy(
+        turnOnJobId = null,
+        turnOffJobId = null,
+      )
+    storage?.saveScheduleConfig(resetSchedule)
     _uiState.update {
       it.copy(
         authConfig = updatedAuth,
+        scheduleConfig = resetSchedule,
         isHeaterOn = device.isOn,
         statusMessage = "Selected switch: ${device.name} (ID ${device.id})",
       )
+    }
+    if (updatedAuth.hasCloudCredentials) {
+      syncScheduleFromTelldus(silent = true)
     }
   }
 
@@ -385,10 +512,35 @@ class MainScreenViewModel(
         heatingWindow = HeaterScheduleCalculator.calculate(updated),
       )
     }
+    if (updated.enabled) {
+      debouncedSyncSchedule()
+    }
+  }
+
+  private fun debouncedSyncSchedule(delayMs: Long = 3000L) {
+    autoSyncJob?.cancel()
+    autoSyncJob =
+      viewModelScope.launch {
+        delay(delayMs)
+        syncScheduleToTelldus(_uiState.value.scheduleConfig)
+      }
+  }
+
+  fun updatePreHeatMinutes(minutes: Int) {
+    val sanitized = minutes.coerceIn(1, 720)
+    val updated = _uiState.value.scheduleConfig.copy(preHeatMinutes = sanitized)
+    storage?.saveScheduleConfig(updated)
+    _uiState.update {
+      it.copy(
+        scheduleConfig = updated,
+        heatingWindow = HeaterScheduleCalculator.calculate(updated),
+      )
+    }
   }
 
   fun updateAutoOffOffset(offsetMinutes: Int) {
-    val updated = _uiState.value.scheduleConfig.copy(autoOffOffsetMinutes = offsetMinutes)
+    val sanitized = offsetMinutes.coerceIn(0, 720)
+    val updated = _uiState.value.scheduleConfig.copy(autoOffOffsetMinutes = sanitized)
     storage?.saveScheduleConfig(updated)
     _uiState.update {
       it.copy(
@@ -410,9 +562,13 @@ class MainScreenViewModel(
         heatingWindow = HeaterScheduleCalculator.calculate(updated),
       )
     }
+    if (updated.enabled) {
+      debouncedSyncSchedule()
+    }
   }
 
   fun setScheduleEnabled(enabled: Boolean) {
+    autoSyncJob?.cancel()
     val updated = _uiState.value.scheduleConfig.copy(enabled = enabled)
     storage?.saveScheduleConfig(updated)
     _uiState.update {
@@ -424,13 +580,50 @@ class MainScreenViewModel(
     syncScheduleToTelldus(updated)
   }
 
+  fun syncScheduleFromTelldus(silent: Boolean = true) {
+    val auth = _uiState.value.authConfig
+    val deviceId = auth.selectedDeviceId ?: return
+    if (!auth.hasCloudCredentials) return
+
+    viewModelScope.launch {
+      runCatching {
+        val cloudDeviceId = apiClient.resolveCloudDeviceId(auth, deviceId)
+        val jobs = apiClient.listScheduleJobs(auth).filter { it.deviceId == cloudDeviceId }
+        val onJob = jobs.firstOrNull { it.method == TelldusMethods.TURNON }
+        val offJob = jobs.firstOrNull { it.method == TelldusMethods.TURNOFF }
+        Triple(onJob, offJob, cloudDeviceId)
+      }.onSuccess { (onJob, offJob, _) ->
+        if (onJob != null) {
+          val current = _uiState.value.scheduleConfig
+          val onTime = java.time.LocalTime.of(onJob.hour.coerceIn(0, 23), onJob.minute.coerceIn(0, 59))
+          val readyTime = onTime.plusMinutes(current.preHeatMinutes.toLong())
+          val syncedConfig =
+            current.copy(
+              enabled = onJob.active,
+              readyHour = readyTime.hour,
+              readyMinute = readyTime.minute,
+              turnOnJobId = onJob.id,
+              turnOffJobId = offJob?.id ?: current.turnOffJobId,
+            )
+          storage?.saveScheduleConfig(syncedConfig)
+          _uiState.update {
+            it.copy(
+              scheduleConfig = syncedConfig,
+              heatingWindow = HeaterScheduleCalculator.calculate(syncedConfig),
+            )
+          }
+        }
+      }
+    }
+  }
+
   fun syncScheduleToTelldus(configOverride: HeaterScheduleConfig? = null) {
     val config = configOverride ?: _uiState.value.scheduleConfig
-    val auth = _uiState.value.authConfig
-    val deviceId = auth.selectedDeviceId
+    val initialAuth = _uiState.value.authConfig
+    val deviceId = initialAuth.selectedDeviceId
     val window = HeaterScheduleCalculator.calculate(config)
 
-    if (!auth.isAuthenticated || deviceId == null) {
+    if (!initialAuth.isAuthenticated || deviceId == null) {
       _uiState.update {
         it.copy(
           errorMessage =
@@ -446,22 +639,40 @@ class MainScreenViewModel(
       return
     }
 
-    viewModelScope.launch {
-      _uiState.update {
-        it.copy(
-          isBusy = true,
-          statusMessage =
-            "Syncing schedule to controller (ON %02d:%02d, OFF %02d:%02d)..."
-              .format(
-                window.startTime.hour,
-                window.startTime.minute,
-                window.stopTime.hour,
-                window.stopTime.minute,
-              ),
-          errorMessage = null,
-        )
-      }
+    activeSyncJob?.cancel()
+    activeSyncJob =
+      viewModelScope.launch {
+        _uiState.update {
+          it.copy(
+            isBusy = true,
+            statusMessage =
+              "Syncing schedule to controller (ON %02d:%02d, OFF %02d:%02d)..."
+                .format(
+                  window.startTime.hour,
+                  window.startTime.minute,
+                  window.stopTime.hour,
+                  window.stopTime.minute,
+                ),
+            errorMessage = null,
+          )
+        }
       runCatching {
+        var auth = _uiState.value.authConfig
+        if (!auth.hasCloudCredentials) {
+          val fetched = apiClient.fetchCloudKeysFromWebViewSession()
+          if (fetched != null) {
+            auth =
+              auth.copy(
+                cloudPublicKey = fetched.publicKey,
+                cloudPrivateKey = fetched.privateKey,
+                cloudToken = fetched.token,
+                cloudTokenSecret = fetched.tokenSecret,
+              )
+            storage?.saveAuthConfig(auth)
+            _uiState.update { it.copy(authConfig = auth) }
+          }
+        }
+
         val onJob =
           TelldusScheduleJob(
             id = config.turnOnJobId ?: 0,
@@ -473,6 +684,11 @@ class MainScreenViewModel(
             active = config.enabled,
           )
         val savedOnId = apiClient.setScheduleJob(auth, onJob)
+        if (savedOnId > 0) {
+          val partial = config.copy(turnOnJobId = savedOnId)
+          storage?.saveScheduleConfig(partial)
+          _uiState.update { it.copy(scheduleConfig = partial) }
+        }
 
         val offJob =
           TelldusScheduleJob(
@@ -517,12 +733,22 @@ class MainScreenViewModel(
           }
         }
         .onFailure { err ->
+          if (err is kotlinx.coroutines.CancellationException) return@onFailure
+          if (err.message?.contains("too many requests", ignoreCase = true) == true) {
+            _uiState.update {
+              it.copy(
+                isBusy = false,
+                errorMessage = null,
+                statusMessage = "Schedule active locally — queued for TellStick cloud sync...",
+              )
+            }
+            debouncedSyncSchedule(delayMs = 25_000L)
+            return@onFailure
+          }
           _uiState.update {
             it.copy(
               isBusy = false,
-              errorMessage =
-                "Failed to sync schedule to TellStick (${err.message}). " +
-                  "Note: If local ZNet firmware blocks /api/scheduler, add Telldus Live Cloud keys in Setup.",
+              errorMessage = "Failed to sync schedule to TellStick (${err.message}).",
             )
           }
         }

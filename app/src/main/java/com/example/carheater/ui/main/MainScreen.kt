@@ -67,12 +67,17 @@ fun MainScreen(
   val lifecycleOwner = LocalLifecycleOwner.current
   DisposableEffect(lifecycleOwner) {
     val observer = LifecycleEventObserver { _, event ->
-      if (event == Lifecycle.Event.ON_RESUME) {
-        viewModel.onAppResumed()
+      when (event) {
+        Lifecycle.Event.ON_RESUME -> viewModel.onAppResumed()
+        Lifecycle.Event.ON_PAUSE -> viewModel.onAppPaused()
+        else -> {}
       }
     }
     lifecycleOwner.lifecycle.addObserver(observer)
-    onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    onDispose {
+      viewModel.onAppPaused()
+      lifecycleOwner.lifecycle.removeObserver(observer)
+    }
   }
 
   MainScreenContent(
@@ -82,7 +87,6 @@ fun MainScreen(
     onTurnOffHeater = { viewModel.setHeaterPower(false) },
     onRefreshStatus = { viewModel.refreshSwitchState(silent = false) },
     onReadyTimeChanged = viewModel::updateReadyTime,
-    onAutoOffOffsetChanged = viewModel::updateAutoOffOffset,
     onToggleWeekday = viewModel::toggleWeekday,
     onSetScheduleEnabled = viewModel::setScheduleEnabled,
     onSyncSchedule = { viewModel.syncScheduleToTelldus() },
@@ -92,6 +96,8 @@ fun MainScreen(
   if (state.showAuthDialog) {
     AuthConfigDialog(
       authConfig = state.authConfig,
+      preHeatMinutes = state.scheduleConfig.preHeatMinutes,
+      autoOffOffsetMinutes = state.scheduleConfig.autoOffOffsetMinutes,
       discoveredTellSticks = state.discoveredTellSticks,
       devices = state.availableDevices,
       isBusy = state.isBusy,
@@ -99,9 +105,12 @@ fun MainScreen(
       errorMessage = state.errorMessage,
       onDismiss = viewModel::closeAuthDialog,
       onSaveAuthConfig = viewModel::updateAuthConfig,
+      onPreHeatMinutesChanged = viewModel::updatePreHeatMinutes,
+      onAutoOffOffsetChanged = viewModel::updateAutoOffOffset,
       onScanLan = viewModel::scanLanForTellStick,
       onStartLocalBrowserAuth = viewModel::startLocalBrowserAuth,
       onCompleteLocalBrowserAuth = { viewModel.completeLocalBrowserAuth(silentIfPending = false) },
+      onAutoFetchCloudKeys = { viewModel.autoFetchCloudKeys(silent = false) },
       onFetchDevices = viewModel::fetchDevices,
       onSelectDevice = viewModel::selectDevice,
     )
@@ -116,7 +125,6 @@ internal fun MainScreenContent(
   onTurnOffHeater: () -> Unit,
   onRefreshStatus: () -> Unit,
   onReadyTimeChanged: (Int, Int) -> Unit,
-  onAutoOffOffsetChanged: (Int) -> Unit,
   onToggleWeekday: (Int) -> Unit,
   onSetScheduleEnabled: (Boolean) -> Unit,
   onSyncSchedule: () -> Unit,
@@ -135,28 +143,44 @@ internal fun MainScreenContent(
       horizontalArrangement = Arrangement.SpaceBetween,
       verticalAlignment = Alignment.CenterVertically,
     ) {
-      Column(modifier = Modifier.weight(1f)) {
+      Column(
+        modifier = Modifier.weight(1f),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+      ) {
         Text(
           text = "Defrostify",
           style = MaterialTheme.typography.headlineSmall,
           fontWeight = FontWeight.Bold,
         )
-        val connectionSubtitle =
-          if (state.authConfig.isAuthenticated) {
-            val targetName =
-              state.authConfig.selectedDeviceName.ifBlank { "Tap 'Switch & Auth' to choose switch" }
-            "Switch: $targetName"
-          } else {
-            "Not connected to TellStick"
+        if (state.authConfig.isAuthenticated) {
+          val targetName =
+            state.authConfig.selectedDeviceName.ifBlank { "Tap 'Config' to choose switch" }
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.clickable { onRefreshStatus() },
+          ) {
+            Text(
+              text = "Switch: $targetName",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.primary,
+              fontWeight = FontWeight.Medium,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+              modifier = Modifier.weight(1f, fill = false),
+            )
+            SwitchStatusBadge(isHeaterOn = state.isHeaterOn)
           }
-        Text(
-          text = connectionSubtitle,
-          style = MaterialTheme.typography.bodySmall,
-          color = MaterialTheme.colorScheme.primary,
-          fontWeight = FontWeight.Medium,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-        )
+        } else {
+          Text(
+            text = "Not connected to TellStick",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
+        }
       }
 
       OutlinedButton(
@@ -164,8 +188,9 @@ internal fun MainScreenContent(
         contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
       ) {
         Text(
-          text = if (state.authConfig.isAuthenticated) "Switch & Auth" else "Configure Auth",
+          text = "⚙ Config",
           fontSize = 13.sp,
+          fontWeight = FontWeight.SemiBold,
           maxLines = 1,
         )
       }
@@ -191,18 +216,14 @@ internal fun MainScreenContent(
     DirectHeaterControlCard(
       isHeaterOn = state.isHeaterOn,
       isBusy = state.isBusy,
-      deviceName = state.authConfig.selectedDeviceName,
-      statusMessage = state.statusMessage,
       onTurnOn = onTurnOnHeater,
       onTurnOff = onTurnOffHeater,
-      onRefresh = onRefreshStatus,
     )
 
     // 2. Samsung Alarm-Style Departure Time & Pre-Heat Schedule Card
     ScheduleConfigurationCard(
       state = state,
       onReadyTimeChanged = onReadyTimeChanged,
-      onAutoOffOffsetChanged = onAutoOffOffsetChanged,
       onToggleWeekday = onToggleWeekday,
       onSetScheduleEnabled = onSetScheduleEnabled,
       onSyncSchedule = onSyncSchedule,
@@ -211,14 +232,56 @@ internal fun MainScreenContent(
 }
 
 @Composable
+private fun SwitchStatusBadge(isHeaterOn: Boolean?) {
+  val bgColor =
+    when (isHeaterOn) {
+      true -> MaterialTheme.colorScheme.primaryContainer
+      false -> MaterialTheme.colorScheme.surfaceContainerHighest
+      null -> MaterialTheme.colorScheme.surfaceContainerHigh
+    }
+  val textColor =
+    when (isHeaterOn) {
+      true -> MaterialTheme.colorScheme.primary
+      false -> MaterialTheme.colorScheme.onSurfaceVariant
+      null -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+  val label =
+    when (isHeaterOn) {
+      true -> "● ON"
+      false -> "○ OFF"
+      null -> "…"
+    }
+
+  Box(
+    modifier =
+      Modifier
+        .clip(RoundedCornerShape(50))
+        .background(bgColor)
+        .border(
+          width = 1.dp,
+          color =
+            if (isHeaterOn == true) MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)
+            else MaterialTheme.colorScheme.outlineVariant,
+          shape = RoundedCornerShape(50),
+        )
+        .padding(horizontal = 8.dp, vertical = 2.dp),
+    contentAlignment = Alignment.Center,
+  ) {
+    Text(
+      text = label,
+      fontSize = 11.sp,
+      fontWeight = FontWeight.ExtraBold,
+      color = textColor,
+    )
+  }
+}
+
+@Composable
 private fun DirectHeaterControlCard(
   isHeaterOn: Boolean?,
   isBusy: Boolean,
-  deviceName: String,
-  statusMessage: String?,
   onTurnOn: () -> Unit,
   onTurnOff: () -> Unit,
-  onRefresh: () -> Unit,
 ) {
   Card(
     shape = RoundedCornerShape(22.dp),
@@ -235,47 +298,13 @@ private fun DirectHeaterControlCard(
   ) {
     Column(
       modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-      verticalArrangement = Arrangement.spacedBy(10.dp),
+      verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-      ) {
-        Column(modifier = Modifier.weight(1f)) {
-          Text(
-            text = "Direct Heater Control",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold,
-          )
-          val statusLabel =
-            when (isHeaterOn) {
-              true -> "STATUS: ON (${deviceName.ifBlank { "Switch" }})"
-              false -> "STATUS: OFF (${deviceName.ifBlank { "Switch" }})"
-              null -> statusMessage ?: "Tap Refresh or select switch"
-            }
-          Text(
-            text = statusLabel,
-            style = MaterialTheme.typography.labelMedium,
-            color =
-              if (isHeaterOn == true) {
-                MaterialTheme.colorScheme.primary
-              } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
-              },
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-          )
-        }
-        TextButton(
-          onClick = onRefresh,
-          enabled = !isBusy,
-          contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-        ) {
-          Text("Refresh", fontSize = 13.sp)
-        }
-      }
+      Text(
+        text = "Direct Heater Control",
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.Bold,
+      )
 
       Row(
         modifier = Modifier.fillMaxWidth(),
@@ -323,7 +352,6 @@ private fun DirectHeaterControlCard(
 private fun ScheduleConfigurationCard(
   state: HeaterUiState,
   onReadyTimeChanged: (Int, Int) -> Unit,
-  onAutoOffOffsetChanged: (Int) -> Unit,
   onToggleWeekday: (Int) -> Unit,
   onSetScheduleEnabled: (Boolean) -> Unit,
   onSyncSchedule: () -> Unit,
@@ -387,7 +415,13 @@ private fun ScheduleConfigurationCard(
         }
       }
 
-      // Calculated 2-Hour Pre-Heat & Auto-Off Summary Timeline
+      // Calculated Pre-Heat & Auto-Off Summary Timeline
+      val preHeatBadge =
+        if (schedule.preHeatMinutes >= 60 && schedule.preHeatMinutes % 60 == 0) {
+          "-${schedule.preHeatMinutes / 60}h"
+        } else {
+          "-${schedule.preHeatMinutes}m"
+        }
       Row(
         modifier =
           Modifier
@@ -399,7 +433,7 @@ private fun ScheduleConfigurationCard(
         verticalAlignment = Alignment.CenterVertically,
       ) {
         TimelineMetric(
-          label = "HEATER ON (-2h)",
+          label = "HEATER ON ($preHeatBadge)",
           timeText = "%02d:%02d".format(window.startTime.hour, window.startTime.minute),
           highlight = true,
         )
@@ -488,33 +522,6 @@ private fun ScheduleConfigurationCard(
           }
         }
       }
-
-      // Auto Turn-Off Offset Configuration
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-      ) {
-        Text(
-          text = "Auto-off:",
-          style = MaterialTheme.typography.labelSmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        listOf(0, 15, 30, 60).forEach { mins ->
-          FilterChip(
-            selected = schedule.autoOffOffsetMinutes == mins,
-            onClick = { onAutoOffOffsetChanged(mins) },
-            label = {
-              Text(
-                text = if (mins == 0) "0m" else "+${mins}m",
-                fontSize = 11.sp,
-                maxLines = 1,
-              )
-            },
-            modifier = Modifier.weight(1f),
-          )
-        }
-      }
     }
   }
 }
@@ -555,7 +562,6 @@ fun MainScreenPreview() {
       onTurnOffHeater = {},
       onRefreshStatus = {},
       onReadyTimeChanged = { _, _ -> },
-      onAutoOffOffsetChanged = {},
       onToggleWeekday = {},
       onSetScheduleEnabled = {},
       onSyncSchedule = {},
