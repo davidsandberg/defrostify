@@ -629,8 +629,8 @@ class TelldusApiClient {
 
     return cloudRateLimitMutex.withLock {
       var lastError: TelldusApiException? = null
-      val minIntervalMs = if (path.startsWith("scheduler/")) 2000L else 800L
-      val backoffDelaysMs = longArrayOf(12_000L, 20_000L, 30_000L)
+      val minIntervalMs = if (path.startsWith("scheduler/setJob")) 5800L else 800L
+      val backoffDelaysMs = longArrayOf(8_000L, 14_000L, 20_000L)
       for (attempt in 1..4) {
         val now = System.currentTimeMillis()
         val elapsed = now - lastCloudCallTimestampMs
