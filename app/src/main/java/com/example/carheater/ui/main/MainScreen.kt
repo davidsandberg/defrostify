@@ -137,7 +137,7 @@ internal fun MainScreenContent(
     ) {
       Column(modifier = Modifier.weight(1f)) {
         Text(
-          text = "Car Heater",
+          text = "Defrostify",
           style = MaterialTheme.typography.headlineSmall,
           fontWeight = FontWeight.Bold,
         )
