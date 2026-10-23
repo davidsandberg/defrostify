@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -39,8 +40,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.carheater.data.telldus.AuthConfig
@@ -51,6 +54,8 @@ import com.example.carheater.data.telldus.TelldusDevice
 @Composable
 fun AuthConfigDialog(
   authConfig: AuthConfig,
+  preHeatMinutes: Int,
+  autoOffOffsetMinutes: Int,
   discoveredTellSticks: List<DiscoveredTellStick>,
   devices: List<TelldusDevice>,
   isBusy: Boolean,
@@ -58,30 +63,24 @@ fun AuthConfigDialog(
   errorMessage: String?,
   onDismiss: () -> Unit,
   onSaveAuthConfig: (AuthConfig) -> Unit,
+  onPreHeatMinutesChanged: (Int) -> Unit,
+  onAutoOffOffsetChanged: (Int) -> Unit,
   onScanLan: () -> Unit,
   onStartLocalBrowserAuth: (ip: String, onAuthUrlReady: (String) -> Unit) -> Unit,
   onCompleteLocalBrowserAuth: () -> Unit,
+  onAutoFetchCloudKeys: () -> Unit = {},
   onFetchDevices: (AuthConfig) -> Unit,
   onSelectDevice: (TelldusDevice) -> Unit,
 ) {
   val context = LocalContext.current
   var draft by remember(authConfig) { mutableStateOf(authConfig) }
+  var preHeatText by remember(preHeatMinutes) { mutableStateOf(preHeatMinutes.toString()) }
+  var autoOffText by remember(autoOffOffsetMinutes) { mutableStateOf(autoOffOffsetMinutes.toString()) }
   var showConnectionEditor by remember(authConfig.isAuthenticated) {
     mutableStateOf(!authConfig.isAuthenticated)
   }
   var showManualTokenField by remember { mutableStateOf(false) }
   var activePopupAuthUrl by remember { mutableStateOf<String?>(null) }
-
-  if (activePopupAuthUrl != null) {
-    ZNetBrowserAuthDialog(
-      authUrl = activePopupAuthUrl!!,
-      onDismiss = { activePopupAuthUrl = null },
-      onAuthCompleted = {
-        activePopupAuthUrl = null
-        onCompleteLocalBrowserAuth()
-      },
-    )
-  }
 
   Dialog(
     onDismissRequest = onDismiss,
@@ -103,8 +102,18 @@ fun AuthConfigDialog(
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp),
       ) {
+        if (activePopupAuthUrl != null) {
+          ZNetBrowserAuthContent(
+            authUrl = activePopupAuthUrl!!,
+            onBack = { activePopupAuthUrl = null },
+            onAuthCompleted = {
+              activePopupAuthUrl = null
+              onCompleteLocalBrowserAuth()
+            },
+          )
+        } else {
         Text(
-          text = "Select Switch & Connection",
+          text = "Configuration",
           style = MaterialTheme.typography.titleLarge,
           fontWeight = FontWeight.Bold,
         )
@@ -201,7 +210,134 @@ fun AuthConfigDialog(
 
         HorizontalDivider()
 
-        // 2. Connection / Auth Settings (Collapsed by default when already authenticated)
+        // 2. Heating Duration & Auto-Off Timer Section
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+          Text(
+            text = "Timer & Heating Duration",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+          )
+
+          // Pre-heat duration before Car Warm time
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Column(modifier = Modifier.weight(1f)) {
+              Text(
+                text = "Pre-heat time (before warm)",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+              )
+              Text(
+                text = "Starts heater $preHeatMinutes min before target time",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
+            OutlinedTextField(
+              value = preHeatText,
+              onValueChange = { raw ->
+                val filtered = raw.filter { it.isDigit() }.take(3)
+                preHeatText = filtered
+                filtered.toIntOrNull()?.let { mins ->
+                  if (mins >= 1) onPreHeatMinutesChanged(mins)
+                }
+              },
+              label = { Text("Min", fontSize = 11.sp) },
+              singleLine = true,
+              keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+              modifier = Modifier.width(82.dp),
+            )
+          }
+
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+          ) {
+            listOf(5, 15, 30, 60, 120).forEach { mins ->
+              FilterChip(
+                selected = preHeatMinutes == mins,
+                onClick = {
+                  preHeatText = mins.toString()
+                  onPreHeatMinutesChanged(mins)
+                },
+                label = {
+                  Text(
+                    text = if (mins == 120) "2h" else if (mins == 60) "1h" else "${mins}m",
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                  )
+                },
+                modifier = Modifier.weight(1f),
+              )
+            }
+          }
+
+          // Auto-off duration after Car Warm time
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Column(modifier = Modifier.weight(1f)) {
+              Text(
+                text = "Auto-off timer (after warm)",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+              )
+              Text(
+                text =
+                  if (autoOffOffsetMinutes == 0) "Turns off right at target time"
+                  else "Turns off +$autoOffOffsetMinutes min after target time",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
+            OutlinedTextField(
+              value = autoOffText,
+              onValueChange = { raw ->
+                val filtered = raw.filter { it.isDigit() }.take(3)
+                autoOffText = filtered
+                filtered.toIntOrNull()?.let { mins ->
+                  onAutoOffOffsetChanged(mins)
+                }
+              },
+              label = { Text("Min", fontSize = 11.sp) },
+              singleLine = true,
+              keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+              modifier = Modifier.width(82.dp),
+            )
+          }
+
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+          ) {
+            listOf(0, 15, 30, 60).forEach { mins ->
+              FilterChip(
+                selected = autoOffOffsetMinutes == mins,
+                onClick = {
+                  autoOffText = mins.toString()
+                  onAutoOffOffsetChanged(mins)
+                },
+                label = {
+                  Text(
+                    text = if (mins == 0) "0m" else "+${mins}m",
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                  )
+                },
+                modifier = Modifier.weight(1f),
+              )
+            }
+          }
+        }
+
+        HorizontalDivider()
+
+        // 3. Connection / Auth Settings (Collapsed by default when already authenticated)
         Row(
           modifier = Modifier.fillMaxWidth(),
           horizontalArrangement = Arrangement.SpaceBetween,
@@ -285,10 +421,12 @@ fun AuthConfigDialog(
           } else {
             CloudAuthSection(
               draft = draft,
+              isBusy = isBusy,
               onDraftChange = {
                 draft = it
                 onSaveAuthConfig(draft)
               },
+              onAutoFetchCloudKeys = onAutoFetchCloudKeys,
               onOpenKeysWebpage = {
                 runCatching {
                   val intent =
@@ -334,6 +472,7 @@ fun AuthConfigDialog(
           ) {
             Text("Done")
           }
+        }
         }
       }
     }
@@ -405,7 +544,7 @@ private fun LocalZNetAuthSection(
       enabled = draft.localIp.isNotBlank() && !isBusy,
       modifier = Modifier.fillMaxWidth(),
     ) {
-      Text("Authenticate in Browser Popup")
+      Text("Sign In to TellStick ZNet")
     }
 
     if (draft.pendingRequestToken.isNotBlank()) {
@@ -464,10 +603,19 @@ private fun LocalZNetAuthSection(
 @Composable
 private fun CloudAuthSection(
   draft: AuthConfig,
+  isBusy: Boolean,
   onDraftChange: (AuthConfig) -> Unit,
+  onAutoFetchCloudKeys: () -> Unit,
   onOpenKeysWebpage: () -> Unit,
 ) {
   Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Button(
+      onClick = onAutoFetchCloudKeys,
+      enabled = !isBusy,
+      modifier = Modifier.fillMaxWidth(),
+    ) {
+      Text("Auto-Fetch Cloud Keys from Login")
+    }
     OutlinedButton(
       onClick = onOpenKeysWebpage,
       modifier = Modifier.fillMaxWidth(),

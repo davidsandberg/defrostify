@@ -16,10 +16,11 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
@@ -27,8 +28,8 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -38,6 +39,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -45,8 +47,6 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import java.io.ByteArrayInputStream
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
@@ -54,265 +54,268 @@ import java.net.URL
 import java.net.URLEncoder
 
 /**
- * In-app Browser Popup for TellStick ZNet Lite v2 authentication.
+ * Inline view (rendered directly inside [AuthConfigDialog] so there are no stacked/overlaid dialogs)
+ * for TellStick ZNet Lite v2 authentication.
  *
- * Includes:
- * 1. Native Android Email & Password inputs at the top (so text is always crisp, visible,
- *    and supports keyboard paste/autofill) that submit directly into the OpenID session.
- * 2. High-contrast CSS override inside the WebView so any web inputs also render dark text on
- *    a white background, plus touch focus handling for Android Dialogs.
- * 3. Plain-HTTP OpenID submission that strips `Strict-Transport-Security` (HSTS) so the
- *    TellStick ZNet Lite v2 at `192.168.1.17` never fails with 404 on `/tellduslive/authorize`.
+ * - Step 1 (on `login.telldus.com`): Shows ONLY the native Material 3 Email & Password form while
+ *   keeping the WebView hidden (1x1 dp) in the background for OpenID session state.
+ * - Step 2 (redirected back to `http://<znet-ip>/api/authorize`): Hides the native login form and
+ *   shows the TellStick ZNet approval page so the user can tap "Authorize", then completes login.
  */
 @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
 @Composable
-fun ZNetBrowserAuthDialog(
+fun ZNetBrowserAuthContent(
   authUrl: String,
-  onDismiss: () -> Unit,
+  onBack: () -> Unit,
   onAuthCompleted: () -> Unit,
 ) {
   var currentUrl by remember { mutableStateOf(authUrl) }
   var isLoading by remember { mutableStateOf(true) }
   var statusHint by remember {
-    mutableStateOf("Enter your Telldus login below, then tap Authorize on the page.")
+    mutableStateOf("Step 1 of 2: Sign in with your Telldus Live account.")
   }
   var email by remember { mutableStateOf("") }
   var password by remember { mutableStateOf("") }
-  var webViewRef by remember { mutableStateOf<WebView?>(null) }
   var bridgeRef by remember { mutableStateOf<TelldusHttpLoginBridge?>(null) }
 
-  val isOnTelldusLoginPage = currentUrl.contains("login.telldus.com")
+  // Show the native login card while we are waiting on the initial redirect or on login.telldus.com
+  val showNativeLoginForm =
+    currentUrl.contains("login.telldus.com") || currentUrl.contains("/web/login")
 
-  Dialog(
-    onDismissRequest = onDismiss,
-    properties =
-      DialogProperties(
-        usePlatformDefaultWidth = false,
-        decorFitsSystemWindows = false,
-      ),
+  Column(
+    modifier = Modifier.fillMaxWidth(),
+    verticalArrangement = Arrangement.spacedBy(12.dp),
   ) {
-    Surface(
-      modifier =
-        Modifier
-          .fillMaxWidth(0.96f)
-          .fillMaxHeight(0.92f)
-          .clip(RoundedCornerShape(24.dp)),
-      color = MaterialTheme.colorScheme.surface,
-      tonalElevation = 6.dp,
+    // Header bar inside the single dialog
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      horizontalArrangement = Arrangement.SpaceBetween,
+      verticalAlignment = Alignment.CenterVertically,
     ) {
-      Column(modifier = Modifier.fillMaxSize()) {
-        // Header bar
-        Row(
-          modifier =
-            Modifier
-              .fillMaxWidth()
-              .padding(horizontal = 16.dp, vertical = 8.dp),
-          horizontalArrangement = Arrangement.SpaceBetween,
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          Column(modifier = Modifier.weight(1f)) {
-            Text(
-              text = "TellStick ZNet Login",
-              style = MaterialTheme.typography.titleMedium,
-              fontWeight = FontWeight.Bold,
-            )
-            Text(
-              text = statusHint,
-              style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.primary,
-              maxLines = 2,
-            )
-          }
-          TextButton(onClick = onDismiss) {
-            Text("Close")
-          }
-        }
+      Column(modifier = Modifier.weight(1f)) {
+        Text(
+          text = "TellStick ZNet Sign-In",
+          style = MaterialTheme.typography.titleLarge,
+          fontWeight = FontWeight.Bold,
+        )
+        Text(
+          text = statusHint,
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.primary,
+        )
+      }
+      TextButton(onClick = onBack) {
+        Text("Back")
+      }
+    }
 
-        if (isLoading) {
-          LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-        }
+    if (isLoading) {
+      LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+    }
 
-        // Native Email & Password helper card when on login.telldus.com
-        if (isOnTelldusLoginPage) {
-          Card(
-            colors =
-              CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
-              ),
-            modifier =
-              Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 6.dp),
-          ) {
-            Column(
-              modifier = Modifier.padding(12.dp),
-              verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-              Text(
-                text = "Telldus Account Login",
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.Bold,
-              )
-              OutlinedTextField(
-                value = email,
-                onValueChange = { email = it },
-                label = { Text("Telldus Email") },
-                singleLine = true,
-                keyboardOptions =
-                  KeyboardOptions(
-                    keyboardType = KeyboardType.Email,
-                    imeAction = ImeAction.Next,
-                  ),
-                modifier = Modifier.fillMaxWidth(),
-              )
-              OutlinedTextField(
-                value = password,
-                onValueChange = { password = it },
-                label = { Text("Telldus Password") },
-                singleLine = true,
-                visualTransformation = PasswordVisualTransformation(),
-                keyboardOptions =
-                  KeyboardOptions(
-                    keyboardType = KeyboardType.Password,
-                    imeAction = ImeAction.Done,
-                  ),
-                modifier = Modifier.fillMaxWidth(),
-              )
-              Button(
-                onClick = {
-                  val targetUrl = currentUrl
-                  bridgeRef?.submitLoginOverPlainHttp(targetUrl, email.trim(), password)
-                },
-                enabled = email.isNotBlank() && password.isNotBlank() && !isLoading,
-                modifier = Modifier.fillMaxWidth(),
-              ) {
-                Text("Sign In to Telldus")
-              }
-            }
-          }
-        }
-
-        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-          AndroidView(
-            modifier = Modifier.fillMaxSize(),
-            factory = { context ->
-              WebView(context).apply {
-                isFocusable = true
-                isFocusableInTouchMode = true
-                setOnTouchListener { v, event ->
-                  when (event.action) {
-                    MotionEvent.ACTION_DOWN,
-                    MotionEvent.ACTION_UP -> {
-                      if (!v.hasFocus()) {
-                        v.requestFocus()
-                      }
-                    }
-                  }
-                  false
-                }
-
-                settings.javaScriptEnabled = true
-                settings.domStorageEnabled = true
-                settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-
-                val cookieManager = CookieManager.getInstance()
-                cookieManager.setAcceptCookie(true)
-                cookieManager.setAcceptThirdPartyCookies(this, true)
-
-                val bridge =
-                  TelldusHttpLoginBridge(
-                    webView = this,
-                    onStatus = { msg ->
-                      Handler(Looper.getMainLooper()).post { statusHint = msg }
-                    },
-                  )
-                bridgeRef = bridge
-                webViewRef = this
-
-                addJavascriptInterface(bridge, "TelldusAuthBridge")
-
-                webViewClient =
-                  object : WebViewClient() {
-                    override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
-                      super.onPageStarted(view, url, favicon)
-                      isLoading = true
-                      if (url != null) {
-                        currentUrl = url
-                      }
-                    }
-
-                    override fun onPageFinished(view: WebView?, url: String?) {
-                      super.onPageFinished(view, url)
-                      isLoading = false
-                      if (url != null) {
-                        currentUrl = url
-                        if (url.contains("/api/authorize") && !url.contains("login.telldus.com")) {
-                          statusHint =
-                            "Almost done! Tap 'Authorize' on the page below, then tap 'Complete Login'."
-                        }
-                      }
-                    }
-
-                    override fun shouldOverrideUrlLoading(
-                      view: WebView?,
-                      request: WebResourceRequest?,
-                    ): Boolean {
-                      val target = request?.url?.toString() ?: return false
-                      if (target.startsWith("https://login.telldus.com")) {
-                        val plainHttp = "http://" + target.removePrefix("https://")
-                        view?.loadUrl(plainHttp)
-                        return true
-                      }
-                      return false
-                    }
-
-                    override fun shouldInterceptRequest(
-                      view: WebView?,
-                      request: WebResourceRequest?,
-                    ): WebResourceResponse? {
-                      val reqUrl = request?.url?.toString() ?: return null
-                      val method = request.method?.uppercase() ?: "GET"
-
-                      if (method == "GET" &&
-                        (reqUrl.startsWith("http://login.telldus.com") ||
-                          reqUrl.startsWith("https://login.telldus.com"))
-                      ) {
-                        val plainUrl =
-                          if (reqUrl.startsWith("https://")) {
-                            "http://" + reqUrl.removePrefix("https://")
-                          } else {
-                            reqUrl
-                          }
-                        return fetchTelldusLoginWithoutHsts(plainUrl)
-                      }
-                      return super.shouldInterceptRequest(view, request)
-                    }
-                  }
-
-                loadUrl(authUrl)
-              }
-            },
-          )
-        }
-
-        // Bottom bar with Complete Login button
-        Row(
-          modifier =
-            Modifier
-              .fillMaxWidth()
-              .padding(12.dp),
-          horizontalArrangement = Arrangement.SpaceBetween,
-          verticalAlignment = Alignment.CenterVertically,
+    // Step 1: Clean native Email & Password card (WebView is hidden below so nothing overlaps!)
+    if (showNativeLoginForm) {
+      Card(
+        colors =
+          CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+          ),
+        modifier = Modifier.fillMaxWidth(),
+      ) {
+        Column(
+          modifier = Modifier.padding(16.dp),
+          verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
           Text(
-            text = currentUrl.take(40),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.weight(1f),
+            text = "Telldus Live Credentials",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
           )
-          Button(onClick = onAuthCompleted) {
-            Text("Complete Login")
+          OutlinedTextField(
+            value = email,
+            onValueChange = { email = it },
+            label = { Text("Telldus Email") },
+            singleLine = true,
+            keyboardOptions =
+              KeyboardOptions(
+                keyboardType = KeyboardType.Email,
+                imeAction = ImeAction.Next,
+              ),
+            modifier = Modifier.fillMaxWidth(),
+          )
+          OutlinedTextField(
+            value = password,
+            onValueChange = { password = it },
+            label = { Text("Telldus Password") },
+            singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            keyboardOptions =
+              KeyboardOptions(
+                keyboardType = KeyboardType.Password,
+                imeAction = ImeAction.Done,
+              ),
+            modifier = Modifier.fillMaxWidth(),
+          )
+          Spacer(modifier = Modifier.height(4.dp))
+          Button(
+            onClick = {
+              val targetUrl = currentUrl
+              bridgeRef?.submitLoginOverPlainHttp(targetUrl, email.trim(), password)
+            },
+            enabled = email.isNotBlank() && password.isNotBlank() && !isLoading,
+            modifier = Modifier.fillMaxWidth(),
+          ) {
+            Text("Sign In to Telldus")
           }
+        }
+      }
+    }
+
+    // Step 2: TellStick Local Approval WebView (hidden 1dp while on Step 1 so there is no double form!)
+    Box(
+      modifier =
+        if (showNativeLoginForm) {
+          Modifier.size(1.dp).alpha(0f)
+        } else {
+          Modifier
+            .fillMaxWidth()
+            .height(360.dp)
+            .clip(RoundedCornerShape(16.dp))
+        }
+    ) {
+      AndroidView(
+        modifier =
+          if (showNativeLoginForm) {
+            Modifier.size(1.dp)
+          } else {
+            Modifier.fillMaxWidth().height(360.dp)
+          },
+        factory = { context ->
+          WebView(context).apply {
+            isFocusable = true
+            isFocusableInTouchMode = true
+            setOnTouchListener { v, event ->
+              when (event.action) {
+                MotionEvent.ACTION_DOWN,
+                MotionEvent.ACTION_UP -> {
+                  if (!v.hasFocus()) {
+                    v.requestFocus()
+                  }
+                }
+              }
+              false
+            }
+
+            settings.javaScriptEnabled = true
+            settings.domStorageEnabled = true
+            settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+
+            val cookieManager = CookieManager.getInstance()
+            cookieManager.setAcceptCookie(true)
+            cookieManager.setAcceptThirdPartyCookies(this, true)
+
+            val bridge =
+              TelldusHttpLoginBridge(
+                webView = this,
+                onStatus = { msg ->
+                  Handler(Looper.getMainLooper()).post { statusHint = msg }
+                },
+                onAuthorized = {
+                  Handler(Looper.getMainLooper()).post { onAuthCompleted() }
+                },
+              )
+            bridgeRef = bridge
+
+            addJavascriptInterface(bridge, "TelldusAuthBridge")
+
+            webViewClient =
+              object : WebViewClient() {
+                override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                  super.onPageStarted(view, url, favicon)
+                  isLoading = true
+                  if (url != null) {
+                    currentUrl = url
+                  }
+                }
+
+                override fun onPageFinished(view: WebView?, url: String?) {
+                  super.onPageFinished(view, url)
+                  isLoading = false
+                  if (url != null) {
+                    currentUrl = url
+                    if (url.contains("/api/authorize") && !url.contains("login.telldus.com")) {
+                      statusHint =
+                        "Step 2 of 2: Tap 'Authorize' below, then tap 'Complete Login'."
+                      // Detect if the page already says access was granted / authorized
+                      view?.evaluateJavascript(
+                        """
+                        (function() {
+                          var text = (document.body && document.body.innerText) ? document.body.innerText : '';
+                          var hasForm = document.querySelector('form') !== null;
+                          if (!hasForm && (text.indexOf('authorized') !== -1 || text.indexOf('Authorized') !== -1 || text.indexOf('success') !== -1)) {
+                            window.TelldusAuthBridge.notifyAuthorized();
+                          }
+                        })();
+                        """.trimIndent(),
+                        null,
+                      )
+                    }
+                  }
+                }
+
+                override fun shouldOverrideUrlLoading(
+                  view: WebView?,
+                  request: WebResourceRequest?,
+                ): Boolean {
+                  val target = request?.url?.toString() ?: return false
+                  if (target.startsWith("https://login.telldus.com")) {
+                    val plainHttp = "http://" + target.removePrefix("https://")
+                    view?.loadUrl(plainHttp)
+                    return true
+                  }
+                  return false
+                }
+
+                override fun shouldInterceptRequest(
+                  view: WebView?,
+                  request: WebResourceRequest?,
+                ): WebResourceResponse? {
+                  val reqUrl = request?.url?.toString() ?: return null
+                  val method = request.method?.uppercase() ?: "GET"
+
+                  if (method == "GET" &&
+                    (reqUrl.startsWith("http://login.telldus.com") ||
+                      reqUrl.startsWith("https://login.telldus.com"))
+                  ) {
+                    val plainUrl =
+                      if (reqUrl.startsWith("https://")) {
+                        "http://" + reqUrl.removePrefix("https://")
+                      } else {
+                        reqUrl
+                      }
+                    return fetchTelldusLoginWithoutHsts(plainUrl)
+                  }
+                  return super.shouldInterceptRequest(view, request)
+                }
+              }
+
+            loadUrl(authUrl)
+          }
+        },
+      )
+    }
+
+    if (!showNativeLoginForm) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        OutlinedButton(onClick = onBack) {
+          Text("Cancel")
+        }
+        Button(onClick = onAuthCompleted) {
+          Text("Complete Login")
         }
       }
     }
@@ -322,8 +325,15 @@ fun ZNetBrowserAuthDialog(
 internal class TelldusHttpLoginBridge(
   private val webView: WebView,
   private val onStatus: (String) -> Unit,
+  private val onAuthorized: () -> Unit = {},
 ) {
   private val mainHandler = Handler(Looper.getMainLooper())
+
+  @JavascriptInterface
+  fun notifyAuthorized() {
+    onStatus("Authorization confirmed! Completing login...")
+    onAuthorized()
+  }
 
   @JavascriptInterface
   fun submitLoginOverPlainHttp(actionUrl: String, email: String, password: String) {
