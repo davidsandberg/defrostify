@@ -8,6 +8,9 @@
 ## UI & User Experience
 - [x] **Polish the authentication dialog**
 - [x] **Auto-update switch state if changed externally** (e.g. via the physical switch button or another app)
+- [ ] **Remove the preconfigured start times (06:30, 07:00, ...) to save space**
+- [ ] **Align text sizes across different panels on the main screen**
+- [ ] **Check if the switch is online** (show 3 states on the main screen: `ON`, `OFF`, `OFFLINE`)
 
 ## Smart Features & Multi-Device Sync
 - [ ] **Sync scheduled start time if set from another phone**
