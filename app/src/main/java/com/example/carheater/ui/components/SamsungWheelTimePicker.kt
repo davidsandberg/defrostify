@@ -26,6 +26,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -120,6 +121,10 @@ fun SamsungWheelTimePicker(
         )
       }
 
+      val currentHour by rememberUpdatedState(hour.coerceIn(0, 23))
+      val currentMinute by rememberUpdatedState(minute.coerceIn(0, 59))
+      val currentOnTimeChanged by rememberUpdatedState(onTimeChanged)
+
       Row(
         modifier = Modifier.fillMaxSize(),
         horizontalArrangement = Arrangement.Center,
@@ -130,8 +135,8 @@ fun SamsungWheelTimePicker(
           rangeSize = 24,
           itemHeight = itemHeight,
           onValueChange = { newHour ->
-            if (newHour != hour) {
-              onTimeChanged(newHour, minute)
+            if (newHour != currentHour) {
+              currentOnTimeChanged(newHour, currentMinute)
             }
           },
           modifier = Modifier.width(110.dp),
@@ -150,8 +155,8 @@ fun SamsungWheelTimePicker(
           rangeSize = 60,
           itemHeight = itemHeight,
           onValueChange = { newMinute ->
-            if (newMinute != minute) {
-              onTimeChanged(hour, newMinute)
+            if (newMinute != currentMinute) {
+              currentOnTimeChanged(currentHour, newMinute)
             }
           },
           modifier = Modifier.width(110.dp),
@@ -191,6 +196,7 @@ private fun CircularNumberWheel(
   }
 
   var lastHapticValue by remember { mutableIntStateOf(value) }
+  val currentOnValueChange by rememberUpdatedState(onValueChange)
 
   LaunchedEffect(listState) {
     snapshotFlow { centerIndex }
@@ -200,15 +206,16 @@ private fun CircularNumberWheel(
         if (selectedVal != lastHapticValue) {
           lastHapticValue = selectedVal
           haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-          onValueChange(selectedVal)
+          currentOnValueChange(selectedVal)
         }
       }
   }
 
-  LaunchedEffect(value) {
+  LaunchedEffect(value, listState.isScrollInProgress) {
     if (!listState.isScrollInProgress) {
       val currentSelected = ((centerIndex % rangeSize) + rangeSize) % rangeSize
       if (currentSelected != value) {
+        lastHapticValue = value
         val currentBase = centerIndex - currentSelected
         val targetCenterIndex = currentBase + value
         listState.animateScrollToItem((targetCenterIndex - 1).coerceAtLeast(0))
