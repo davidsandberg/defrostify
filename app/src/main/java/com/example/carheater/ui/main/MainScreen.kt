@@ -397,7 +397,7 @@ private fun ScheduleConfigurationCard(
           verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
           Text(
-            text = "When Car Should Be Warm",
+            text = "Schedule",
             fontSize = 17.sp,
             fontWeight = FontWeight.Bold,
           )
