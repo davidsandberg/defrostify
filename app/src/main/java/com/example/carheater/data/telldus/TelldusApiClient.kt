@@ -302,6 +302,84 @@ class TelldusApiClient {
     }
 
   /**
+   * Queries current live power consumption in Watts (`scale = 2`) from the switch's built-in
+   * Z-Wave wattmeter sensor (`sensor/info` locally, or `sensors/list` via Telldus Cloud).
+   * Returns `null` if the switch has no wattmeter sensor or cannot be queried.
+   */
+  suspend fun getDevicePowerWatts(
+    auth: AuthConfig,
+    deviceId: Int,
+    deviceName: String = auth.selectedDeviceName,
+  ): Double? =
+    withContext(Dispatchers.IO) {
+      if (auth.connectionMode == ConnectionMode.LOCAL_ZNET &&
+        auth.localIp.isNotBlank() &&
+        auth.localBearerToken.isNotBlank()
+      ) {
+        val localWatts =
+          runCatching {
+            val responseText =
+              callLocalZNetEndpoint(
+                auth = auth,
+                path = "sensor/info",
+                queryParams = mapOf("id" to deviceId.toString()),
+              )
+            val obj = JSONObject(responseText)
+            checkForApiError(obj, responseText)
+            extractWattScale2(obj.optJSONArray("data"))
+          }.getOrNull()
+        if (localWatts != null) {
+          return@withContext localWatts
+        }
+      }
+
+      if (auth.hasCloudCredentials) {
+        runCatching {
+          val responseText =
+            callCloudEndpoint(
+              auth = auth,
+              path = "sensors/list",
+              queryParams = mapOf("includeValues" to "1", "includeScale" to "1"),
+            )
+          val obj = JSONObject(responseText)
+          checkForApiError(obj, responseText)
+          val sensors = obj.optJSONArray("sensor") ?: JSONArray()
+          val trimmedName = deviceName.trim()
+          for (i in 0 until sensors.length()) {
+            val s = sensors.optJSONObject(i) ?: continue
+            val sensorLocalId = s.optString("sensorId", "").toIntOrNull()
+            val sensorCloudId = s.optInt("id", 0)
+            val sName = s.optString("name", "").trim()
+            val idMatches = sensorLocalId == deviceId || sensorCloudId == deviceId
+            val nameMatches =
+              trimmedName.isNotEmpty() && sName.equals(trimmedName, ignoreCase = true)
+            if (idMatches || nameMatches) {
+              val w = extractWattScale2(s.optJSONArray("data"))
+              if (w != null) return@runCatching w
+            }
+          }
+          null
+        }.getOrNull()
+      } else {
+        null
+      }
+    }
+
+  private fun extractWattScale2(dataArray: JSONArray?): Double? {
+    if (dataArray == null) return null
+    for (i in 0 until dataArray.length()) {
+      val item = dataArray.optJSONObject(i) ?: continue
+      val name = item.optString("name", "")
+      val scale = item.optString("scale", "")
+      if (name.equals("watt", ignoreCase = true) && scale == "2") {
+        val v = item.optString("value", "").toDoubleOrNull() ?: item.optDouble("value")
+        if (!v.isNaN()) return v
+      }
+    }
+    return null
+  }
+
+  /**
    * Immediately turns ON the specified device (`device/turnOn`).
    */
   suspend fun turnOnDevice(auth: AuthConfig, deviceId: Int): String =

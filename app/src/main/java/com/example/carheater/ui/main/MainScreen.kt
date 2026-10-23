@@ -21,13 +21,10 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -138,60 +135,67 @@ internal fun MainScreenContent(
     verticalArrangement = Arrangement.spacedBy(10.dp),
   ) {
     // Top Header Bar
-    Row(
+    Column(
       modifier = Modifier.fillMaxWidth(),
-      horizontalArrangement = Arrangement.SpaceBetween,
-      verticalAlignment = Alignment.CenterVertically,
+      verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-      Column(
-        modifier = Modifier.weight(1f),
-        verticalArrangement = Arrangement.spacedBy(2.dp),
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
       ) {
         Text(
           text = "Defrostify",
-          style = MaterialTheme.typography.headlineSmall,
+          fontSize = 22.sp,
           fontWeight = FontWeight.Bold,
         )
-        if (state.authConfig.isAuthenticated) {
-          val targetName =
-            state.authConfig.selectedDeviceName.ifBlank { "Tap 'Config' to choose switch" }
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.clickable { onRefreshStatus() },
-          ) {
-            Text(
-              text = "Switch: $targetName",
-              style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.primary,
-              fontWeight = FontWeight.Medium,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-              modifier = Modifier.weight(1f, fill = false),
-            )
-            SwitchStatusBadge(isHeaterOn = state.isHeaterOn)
-          }
-        } else {
+
+        OutlinedButton(
+          onClick = onOpenAuthDialog,
+          contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+        ) {
           Text(
-            text = "Not connected to TellStick",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            fontWeight = FontWeight.Medium,
+            text = "⚙ Config",
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold,
             maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
           )
         }
       }
 
-      OutlinedButton(
-        onClick = onOpenAuthDialog,
-        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-      ) {
+      if (state.authConfig.isAuthenticated) {
+        val targetName =
+          state.authConfig.selectedDeviceName.ifBlank { "Tap 'Config' to choose switch" }
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+          modifier =
+            Modifier
+              .fillMaxWidth()
+              .clickable { onRefreshStatus() },
+        ) {
+          Text(
+            text = "Switch: $targetName",
+            fontSize = 13.sp,
+            color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false),
+          )
+          SwitchStatusBadge(
+            isHeaterOn = state.isHeaterOn,
+            powerWatts = state.powerWatts,
+          )
+        }
+      } else {
         Text(
-          text = "⚙ Config",
+          text = "Not connected to TellStick",
           fontSize = 13.sp,
-          fontWeight = FontWeight.SemiBold,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          fontWeight = FontWeight.Medium,
           maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
         )
       }
     }
@@ -232,7 +236,10 @@ internal fun MainScreenContent(
 }
 
 @Composable
-private fun SwitchStatusBadge(isHeaterOn: Boolean?) {
+private fun SwitchStatusBadge(
+  isHeaterOn: Boolean?,
+  powerWatts: Double? = null,
+) {
   val bgColor =
     when (isHeaterOn) {
       true -> MaterialTheme.colorScheme.primaryContainer
@@ -245,10 +252,20 @@ private fun SwitchStatusBadge(isHeaterOn: Boolean?) {
       false -> MaterialTheme.colorScheme.onSurfaceVariant
       null -> MaterialTheme.colorScheme.onSurfaceVariant
     }
+  val wattSuffix =
+    powerWatts?.let { w ->
+      val formatted =
+        when {
+          w < 0.05 -> "0 W"
+          w < 10.0 -> String.format(java.util.Locale.US, "%.1f W", w)
+          else -> "${kotlin.math.round(w).toInt()} W"
+        }
+      " · $formatted"
+    }.orEmpty()
   val label =
     when (isHeaterOn) {
-      true -> "● ON"
-      false -> "○ OFF"
+      true -> "● ON$wattSuffix"
+      false -> "○ OFF$wattSuffix"
       null -> "…"
     }
 
@@ -297,12 +314,12 @@ private fun DirectHeaterControlCard(
     modifier = Modifier.fillMaxWidth(),
   ) {
     Column(
-      modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-      verticalArrangement = Arrangement.spacedBy(8.dp),
+      modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+      verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
       Text(
-        text = "Direct Heater Control",
-        style = MaterialTheme.typography.titleMedium,
+        text = "Direct Control",
+        fontSize = 17.sp,
         fontWeight = FontWeight.Bold,
       )
 
@@ -318,8 +335,8 @@ private fun DirectHeaterControlCard(
           modifier = Modifier.weight(1f).height(46.dp),
         ) {
           Text(
-            text = "START HEATER",
-            fontSize = 14.sp,
+            text = "● ON",
+            fontSize = 13.sp,
             fontWeight = FontWeight.Bold,
             maxLines = 1,
           )
@@ -337,8 +354,8 @@ private fun DirectHeaterControlCard(
           modifier = Modifier.weight(1f).height(46.dp),
         ) {
           Text(
-            text = "STOP HEATER",
-            fontSize = 14.sp,
+            text = "○ OFF",
+            fontSize = 13.sp,
             fontWeight = FontWeight.Bold,
             maxLines = 1,
           )
@@ -360,14 +377,14 @@ private fun ScheduleConfigurationCard(
   val window = state.heatingWindow
 
   Card(
-    shape = RoundedCornerShape(24.dp),
+    shape = RoundedCornerShape(22.dp),
     colors =
       CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
     modifier = Modifier.fillMaxWidth(),
   ) {
     Column(
-      modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-      verticalArrangement = Arrangement.spacedBy(10.dp),
+      modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+      verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
       // Title + Master Schedule Switch
       Row(
@@ -375,10 +392,13 @@ private fun ScheduleConfigurationCard(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
       ) {
-        Column(modifier = Modifier.weight(1f)) {
+        Column(
+          modifier = Modifier.weight(1f),
+          verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
           Text(
             text = "When Car Should Be Warm",
-            style = MaterialTheme.typography.titleMedium,
+            fontSize = 17.sp,
             fontWeight = FontWeight.Bold,
           )
           val scheduleSubtitle =
@@ -390,7 +410,7 @@ private fun ScheduleConfigurationCard(
             }
           Text(
             text = scheduleSubtitle,
-            style = MaterialTheme.typography.bodySmall,
+            fontSize = 13.sp,
             color = MaterialTheme.colorScheme.primary,
             fontWeight = FontWeight.Medium,
           )
@@ -408,20 +428,6 @@ private fun ScheduleConfigurationCard(
         onTimeChanged = onReadyTimeChanged,
       )
 
-      // Quick Morning Presets
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-      ) {
-        val presets = listOf(6 to 30, 7 to 0, 7 to 30, 8 to 0)
-        presets.forEach { (h, m) ->
-          SuggestionChip(
-            onClick = { onReadyTimeChanged(h, m) },
-            label = { Text("%02d:%02d".format(h, m), fontSize = 12.sp) },
-          )
-        }
-      }
-
       // Calculated Pre-Heat & Auto-Off Summary Timeline
       val preHeatBadge =
         if (schedule.preHeatMinutes >= 60 && schedule.preHeatMinutes % 60 == 0) {
@@ -435,39 +441,41 @@ private fun ScheduleConfigurationCard(
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
             .background(MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.65f))
-            .padding(vertical = 8.dp, horizontal = 12.dp),
+            .padding(vertical = 10.dp, horizontal = 12.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
       ) {
         TimelineMetric(
-          label = "HEATER ON ($preHeatBadge)",
+          label = "ON ($preHeatBadge)",
           timeText = "%02d:%02d".format(window.startTime.hour, window.startTime.minute),
           highlight = true,
         )
         Text(
           text = "→",
-          style = MaterialTheme.typography.titleMedium,
+          fontSize = 16.sp,
+          fontWeight = FontWeight.Bold,
           color = MaterialTheme.colorScheme.onSecondaryContainer,
         )
         TimelineMetric(
-          label = "CAR WARM",
+          label = "READY",
           timeText = "%02d:%02d".format(window.readyTime.hour, window.readyTime.minute),
           highlight = false,
         )
         Text(
           text = "→",
-          style = MaterialTheme.typography.titleMedium,
+          fontSize = 16.sp,
+          fontWeight = FontWeight.Bold,
           color = MaterialTheme.colorScheme.onSecondaryContainer,
         )
         TimelineMetric(
-          label = "AUTO OFF (+${schedule.autoOffOffsetMinutes}m)",
+          label = "OFF (+${schedule.autoOffOffsetMinutes}m)",
           timeText = "%02d:%02d".format(window.stopTime.hour, window.stopTime.minute),
           highlight = false,
         )
       }
 
       // Samsung Alarm-style Day-of-Week Selector
-      Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+      Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         val daySummary =
           if (schedule.activeWeekdays.isEmpty()) {
             "Next occurrence (${window.nextReadyDateTime.dayOfWeek.name.lowercase().replaceFirstChar { it.uppercase() }})"
@@ -476,7 +484,8 @@ private fun ScheduleConfigurationCard(
           }
         Text(
           text = daySummary,
-          style = MaterialTheme.typography.labelSmall,
+          fontSize = 13.sp,
+          fontWeight = FontWeight.Medium,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
@@ -539,17 +548,20 @@ private fun TimelineMetric(
   timeText: String,
   highlight: Boolean,
 ) {
-  Column(horizontalAlignment = Alignment.CenterHorizontally) {
+  Column(
+    horizontalAlignment = Alignment.CenterHorizontally,
+    verticalArrangement = Arrangement.spacedBy(2.dp),
+  ) {
     Text(
       text = label,
-      style = MaterialTheme.typography.labelSmall,
-      fontSize = 9.sp,
-      color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f),
+      fontSize = 11.sp,
+      fontWeight = FontWeight.SemiBold,
+      color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.85f),
       textAlign = TextAlign.Center,
     )
     Text(
       text = timeText,
-      style = MaterialTheme.typography.titleMedium,
+      fontSize = 16.sp,
       fontWeight = FontWeight.ExtraBold,
       color =
         if (highlight) MaterialTheme.colorScheme.primary

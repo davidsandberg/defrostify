@@ -74,7 +74,8 @@ fun SamsungWheelTimePicker(
     ) {
       Text(
         text = "HOUR",
-        style = MaterialTheme.typography.labelSmall,
+        fontSize = 11.sp,
+        fontWeight = FontWeight.SemiBold,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         letterSpacing = 1.2.sp,
         textAlign = TextAlign.Center,
@@ -87,7 +88,8 @@ fun SamsungWheelTimePicker(
       )
       Text(
         text = "MINUTE",
-        style = MaterialTheme.typography.labelSmall,
+        fontSize = 11.sp,
+        fontWeight = FontWeight.SemiBold,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         letterSpacing = 1.2.sp,
         textAlign = TextAlign.Center,

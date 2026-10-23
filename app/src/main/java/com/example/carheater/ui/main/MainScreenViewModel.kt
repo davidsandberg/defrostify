@@ -26,6 +26,7 @@ data class HeaterUiState(
   val heatingWindow: CalculatedHeatingWindow =
     HeaterScheduleCalculator.calculate(HeaterScheduleConfig()),
   val isHeaterOn: Boolean? = null,
+  val powerWatts: Double? = null,
   val availableDevices: List<TelldusDevice> = emptyList(),
   val discoveredTellSticks: List<DiscoveredTellStick> = emptyList(),
   val isBusy: Boolean = false,
@@ -357,12 +358,17 @@ class MainScreenViewModel(
             } else {
               auth
             }
+          val initialWatts =
+            selectedDevice?.let { dev ->
+              apiClient.getDevicePowerWatts(updatedAuth, dev.id, dev.name)
+            }
           _uiState.update {
             it.copy(
               isBusy = false,
               authConfig = updatedAuth,
               availableDevices = list,
               isHeaterOn = selectedDevice?.isOn,
+              powerWatts = initialWatts,
               statusMessage =
                 if (list.isNotEmpty()) {
                   "Loaded ${list.size} switch(es)."
@@ -408,9 +414,11 @@ class MainScreenViewModel(
         authConfig = updatedAuth,
         scheduleConfig = resetSchedule,
         isHeaterOn = device.isOn,
+        powerWatts = null,
         statusMessage = "Selected switch: ${device.name} (ID ${device.id})",
       )
     }
+    refreshSwitchState(silent = true)
     if (updatedAuth.hasCloudCredentials) {
       syncScheduleFromTelldus(silent = true)
     }
@@ -425,12 +433,17 @@ class MainScreenViewModel(
       if (!silent) {
         _uiState.update { it.copy(isBusy = true, errorMessage = null) }
       }
-      runCatching { apiClient.getDeviceInfo(auth, deviceId) }
-        .onSuccess { device ->
+      runCatching {
+        val device = apiClient.getDeviceInfo(auth, deviceId)
+        val watts = apiClient.getDevicePowerWatts(auth, deviceId, device.name)
+        device to watts
+      }
+        .onSuccess { (device, watts) ->
           _uiState.update {
             it.copy(
               isBusy = false,
               isHeaterOn = device.isOn,
+              powerWatts = watts ?: it.powerWatts,
               heatingWindow = HeaterScheduleCalculator.calculate(it.scheduleConfig),
               statusMessage =
                 if (silent) it.statusMessage
@@ -488,6 +501,11 @@ class MainScreenViewModel(
                 else "Heater turned OFF (${auth.selectedDeviceName}).",
             )
           }
+          // Verify actual Z-Wave ACK state and updated wattmeter report shortly after command
+          delay(1200L)
+          refreshSwitchState(silent = true)
+          delay(2000L)
+          refreshSwitchState(silent = true)
         }
         .onFailure { err ->
           _uiState.update {
