@@ -183,7 +183,7 @@ class MainScreenViewModel(
           errorMessage = null,
         )
       }
-      runCatching { apiClient.requestLocalToken(trimmedIp, appName = "CarHeater") }
+      runCatching { apiClient.requestLocalToken(trimmedIp, appName = "Defrostify") }
         .onSuccess { tokenResp ->
           val updatedAuth =
             _uiState.value.authConfig.copy(

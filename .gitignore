@@ -1,6 +1,7 @@
 *.iml
 .gradle
-/local.properties
+/.kotlin/
+local.properties
 keystore.properties
 *.jks
 *.keystore
@@ -15,6 +16,7 @@ keystore.properties
 /captures
 .externalNativeBuild
 .cxx
+.kotlin/
 local.properties
 keystore.properties
 *.jks

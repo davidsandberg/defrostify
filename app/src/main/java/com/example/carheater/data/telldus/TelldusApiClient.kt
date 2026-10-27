@@ -100,11 +100,11 @@ class TelldusApiClient {
 
   /**
    * Step 1 of TellStick ZNet Local API browser-popup authentication:
-   * PUT http://<ip>/api/token with form param app=CarHeater
+   * PUT http://<ip>/api/token with form param app=Defrostify
    */
   suspend fun requestLocalToken(
     rawIp: String,
-    appName: String = "CarHeater",
+    appName: String = "Defrostify",
   ): TelldusTokenRequestResponse =
     withContext(Dispatchers.IO) {
       val baseUrl = normalizeLocalBaseUrl(rawIp)
