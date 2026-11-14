@@ -54,6 +54,8 @@ class MainScreenViewModel(
   private var activeSyncJob: Job? = null
   private var statusPollJob: Job? = null
   private var lastLocalTriggerKey: String = ""
+  private var lastManualCommandTimeMs: Long = 0L
+  private var lastManualCommandTargetOn: Boolean? = null
 
   init {
     TelldusApiClient.onDeviceMappingRegistered = { lId, cId ->
@@ -442,6 +444,7 @@ class MainScreenViewModel(
   }
 
   fun selectDevice(device: TelldusDevice) {
+    lastManualCommandTargetOn = null
     val updatedAuth =
       _uiState.value.authConfig.copy(
         selectedDeviceId = device.id,
@@ -486,26 +489,38 @@ class MainScreenViewModel(
     }
     runCatching {
       val device = apiClient.getDeviceInfo(auth, deviceId)
+      val pendingTarget = lastManualCommandTargetOn
+      val elapsedSinceManualMs = System.currentTimeMillis() - lastManualCommandTimeMs
+      val effectiveIsOn =
+        if (pendingTarget != null && elapsedSinceManualMs in 0..75_000L) {
+          if (device.isOn == pendingTarget) {
+            lastManualCommandTargetOn = null
+          }
+          pendingTarget
+        } else {
+          lastManualCommandTargetOn = null
+          device.isOn
+        }
       val watts =
-        if (!device.isOn) {
+        if (!effectiveIsOn) {
           0.0
         } else if (TelldusApiClient.isLocalReachable() || !silent) {
           apiClient.getDevicePowerWatts(auth, deviceId, device.name)
         } else {
           _uiState.value.powerWatts
         }
-      device to watts
+      Triple(device, effectiveIsOn, watts)
     }
-      .onSuccess { (device, watts) ->
+      .onSuccess { (device, effectiveIsOn, watts) ->
         _uiState.update {
           it.copy(
             isBusy = false,
-            isHeaterOn = device.isOn,
-            powerWatts = if (!device.isOn) 0.0 else (watts ?: it.powerWatts),
+            isHeaterOn = effectiveIsOn,
+            powerWatts = if (!effectiveIsOn) 0.0 else (watts ?: it.powerWatts),
             heatingWindow = HeaterScheduleCalculator.calculate(it.scheduleConfig),
             statusMessage =
               if (silent) it.statusMessage
-              else "Switch '${device.name}' is currently ${if (device.isOn) "ON" else "OFF"}.",
+              else "Switch '${device.name}' is currently ${if (effectiveIsOn) "ON" else "OFF"}.",
           )
         }
       }
@@ -552,10 +567,13 @@ class MainScreenViewModel(
         }
       }
         .onSuccess {
+          lastManualCommandTimeMs = System.currentTimeMillis()
+          lastManualCommandTargetOn = turnOn
           _uiState.update {
             it.copy(
               isBusy = false,
               isHeaterOn = turnOn,
+              powerWatts = if (!turnOn) 0.0 else it.powerWatts,
               statusMessage =
                 if (turnOn) "Heater turned ON (${auth.selectedDeviceName})."
                 else "Heater turned OFF (${auth.selectedDeviceName}).",
@@ -563,10 +581,12 @@ class MainScreenViewModel(
           }
           // Resume background polling
           startStatusPolling()
-          // Over Cloud, wait slightly longer and verify device state
-          val delayMs = if (TelldusApiClient.isLocalReachable()) 1500L else 4000L
-          delay(delayMs)
-          refreshSwitchState(silent = true)
+          // When turning ON, wait ~2.5s for the Fibaro meter report to arrive and fetch live wattage
+          if (turnOn) {
+            val delayMs = if (TelldusApiClient.isLocalReachable()) 2500L else 4000L
+            delay(delayMs)
+            refreshSwitchState(silent = true)
+          }
         }
         .onFailure { err ->
           startStatusPolling()
