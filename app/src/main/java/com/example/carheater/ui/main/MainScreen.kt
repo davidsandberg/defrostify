@@ -437,12 +437,17 @@ private fun ScheduleConfigurationCard(
               isTimeModified -> "Pending: Ready at %02d:%02d · Tap 'Set Time'".format(stagedHour, stagedMinute)
               schedule.enabled ->
                 "${HeaterScheduleCalculator.formatCountdown(window.durationUntilStart)} · ✓ Synced"
-              else -> HeaterScheduleCalculator.formatCountdown(window.durationUntilStart)
+              else -> "Schedule disabled"
             }
           Text(
             text = scheduleSubtitle,
             fontSize = 13.sp,
-            color = if (isTimeModified) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary,
+            color =
+              when {
+                isTimeModified -> MaterialTheme.colorScheme.tertiary
+                schedule.enabled -> MaterialTheme.colorScheme.primary
+                else -> MaterialTheme.colorScheme.onSurfaceVariant
+              },
             fontWeight = FontWeight.Medium,
           )
         }
@@ -509,8 +514,10 @@ private fun ScheduleConfigurationCard(
       ) {
         val btnLabel = if (isTimeModified) {
           "Set Time (%02d:%02d)".format(stagedHour, stagedMinute)
-        } else {
+        } else if (schedule.enabled) {
           "✓ Schedule Set (%02d:%02d)".format(schedule.readyHour, schedule.readyMinute)
+        } else {
+          "Schedule Disabled (%02d:%02d)".format(schedule.readyHour, schedule.readyMinute)
         }
         Text(
           text = btnLabel,
