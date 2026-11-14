@@ -328,15 +328,17 @@ class MainScreenViewModel(
   }
 
   private fun checkAndDisarmOneShotSchedule() {
-    val sched = _uiState.value.scheduleConfig
+    val state = _uiState.value
+    val sched = state.scheduleConfig
     if (sched.enabled && sched.activeWeekdays.isEmpty()) {
       val targetDate = sched.targetDate
       val runDate = targetDate?.let { runCatching { java.time.LocalDate.parse(it) }.getOrNull() }
       if (runDate != null) {
-        // Give the Telldus controller at least 10 minutes after stopTime to fire the OFF job
-        // and complete any Z-Wave retries before deactivating the job on Telldus.
+        // Once the switch is confirmed OFF, disarm 1 minute after stopTime;
+        // if still ON (waiting for Z-Wave retries), give the controller 6 minutes before disarming.
+        val graceMinutes = if (state.isHeaterOn == false) 1L else 6L
         val disarmDateTime = runDate.atTime(java.time.LocalTime.of(sched.readyHour, sched.readyMinute))
-          .plusMinutes(sched.autoOffOffsetMinutes.toLong() + 10L)
+          .plusMinutes(sched.autoOffOffsetMinutes.toLong() + graceMinutes)
         if (java.time.LocalDateTime.now().isAfter(disarmDateTime)) {
           setScheduleEnabled(false)
         }
@@ -525,6 +527,7 @@ class MainScreenViewModel(
               else "Switch '${device.name}' is currently ${if (effectiveIsOn) "ON" else "OFF"}.",
           )
         }
+        checkAndDisarmOneShotSchedule()
       }
       .onFailure { err ->
         _uiState.update {
@@ -750,11 +753,12 @@ class MainScreenViewModel(
           var isEnabled = onJob.active
           val targetDate = parsedMeta?.targetDate
 
-          // Auto-disarm single-occurrence schedule once 10 minutes have passed after its stop time
+          // Auto-disarm single-occurrence schedule once stop time + grace period has passed
           if (isEnabled && activeDays.isEmpty() && !targetDate.isNullOrBlank()) {
             val runDate = runCatching { java.time.LocalDate.parse(targetDate) }.getOrNull()
             if (runDate != null) {
-              val disarmDateTime = runDate.atTime(readyTime).plusMinutes(postHeat.toLong() + 10L)
+              val graceMinutes = if (_uiState.value.isHeaterOn == false) 1L else 6L
+              val disarmDateTime = runDate.atTime(readyTime).plusMinutes(postHeat.toLong() + graceMinutes)
               if (java.time.LocalDateTime.now().isAfter(disarmDateTime)) {
                 isEnabled = false
               }
