@@ -333,9 +333,11 @@ class MainScreenViewModel(
       val targetDate = sched.targetDate
       val runDate = targetDate?.let { runCatching { java.time.LocalDate.parse(it) }.getOrNull() }
       if (runDate != null) {
-        val stopDateTime = runDate.atTime(java.time.LocalTime.of(sched.readyHour, sched.readyMinute))
-          .plusMinutes(sched.autoOffOffsetMinutes.toLong())
-        if (java.time.LocalDateTime.now().isAfter(stopDateTime)) {
+        // Give the Telldus controller at least 10 minutes after stopTime to fire the OFF job
+        // and complete any Z-Wave retries before deactivating the job on Telldus.
+        val disarmDateTime = runDate.atTime(java.time.LocalTime.of(sched.readyHour, sched.readyMinute))
+          .plusMinutes(sched.autoOffOffsetMinutes.toLong() + 10L)
+        if (java.time.LocalDateTime.now().isAfter(disarmDateTime)) {
           setScheduleEnabled(false)
         }
       }
@@ -748,12 +750,12 @@ class MainScreenViewModel(
           var isEnabled = onJob.active
           val targetDate = parsedMeta?.targetDate
 
-          // Auto-disarm single-occurrence schedule if its stop time has passed
+          // Auto-disarm single-occurrence schedule once 10 minutes have passed after its stop time
           if (isEnabled && activeDays.isEmpty() && !targetDate.isNullOrBlank()) {
             val runDate = runCatching { java.time.LocalDate.parse(targetDate) }.getOrNull()
             if (runDate != null) {
-              val stopDateTime = runDate.atTime(readyTime).plusMinutes(postHeat.toLong())
-              if (java.time.LocalDateTime.now().isAfter(stopDateTime)) {
+              val disarmDateTime = runDate.atTime(readyTime).plusMinutes(postHeat.toLong() + 10L)
+              if (java.time.LocalDateTime.now().isAfter(disarmDateTime)) {
                 isEnabled = false
               }
             }
