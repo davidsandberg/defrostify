@@ -37,7 +37,8 @@ class HeaterStorage(context: Context) {
         prefs.getString("cloud_token_secret", "")?.ifBlank { null } ?: DEFAULT_CLOUD_TOKEN_SECRET,
       selectedDeviceId = selectedId,
       selectedDeviceName =
-        prefs.getString("selected_device_name", "")?.ifBlank { null } ?: DEFAULT_DEVICE_NAME,
+        prefs.getString("selected_device_name", "")?.substringBefore("|")?.trim()?.ifBlank { null }
+          ?: DEFAULT_DEVICE_NAME,
     )
   }
 
@@ -60,7 +61,7 @@ class HeaterStorage(context: Context) {
           remove("selected_device_id")
         }
       }
-      .putString("selected_device_name", config.selectedDeviceName)
+      .putString("selected_device_name", config.selectedDeviceName.substringBefore("|").trim())
       .apply()
   }
 

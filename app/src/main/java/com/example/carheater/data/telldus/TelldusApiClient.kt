@@ -199,7 +199,7 @@ class TelldusApiClient {
         devices.add(
           TelldusDevice(
             id = id,
-            name = obj.optString("name", "Device #${id}"),
+            name = obj.optString("name", "Device #${id}").substringBefore("|").trim(),
             state = obj.optInt("state", TelldusMethods.TURNOFF),
             stateValue = obj.optString("statevalue", "").ifBlank { null },
             methods = methods,
@@ -254,7 +254,7 @@ class TelldusApiClient {
         }
       TelldusDevice(
         id = deviceId,
-        name = obj.optString("name", "Device #$deviceId"),
+        name = obj.optString("name", "Device #$deviceId").substringBefore("|").trim(),
         state = parsedState,
         stateValue = obj.optString("statevalue", "").ifBlank { null },
         methods = obj.optInt("methods", TelldusMethods.TURNON or TelldusMethods.TURNOFF),
