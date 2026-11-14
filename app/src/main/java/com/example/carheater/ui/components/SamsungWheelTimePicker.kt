@@ -44,6 +44,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.math.abs
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 /**
@@ -218,15 +219,21 @@ private fun CircularNumberWheel(
 
   LaunchedEffect(value) {
     val currentSelected = ((centerIndex % rangeSize) + rangeSize) % rangeSize
-    if (currentSelected != value && !listState.isScrollInProgress) {
-      isProgrammaticScroll = true
-      try {
-        lastHapticValue = value
-        val currentBase = centerIndex - currentSelected
-        val targetCenterIndex = currentBase + value
-        listState.scrollToItem((targetCenterIndex - 1).coerceAtLeast(0))
-      } finally {
-        isProgrammaticScroll = false
+    if (currentSelected != value) {
+      if (listState.isScrollInProgress) {
+        snapshotFlow { listState.isScrollInProgress }.first { !it }
+      }
+      val updatedSelected = ((centerIndex % rangeSize) + rangeSize) % rangeSize
+      if (updatedSelected != value) {
+        isProgrammaticScroll = true
+        try {
+          lastHapticValue = value
+          val currentBase = centerIndex - updatedSelected
+          val targetCenterIndex = currentBase + value
+          listState.scrollToItem((targetCenterIndex - 1).coerceAtLeast(0))
+        } finally {
+          isProgrammaticScroll = false
+        }
       }
     }
   }

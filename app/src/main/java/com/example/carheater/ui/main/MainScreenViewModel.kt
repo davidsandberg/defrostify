@@ -757,9 +757,60 @@ class MainScreenViewModel(
   private suspend fun performSyncScheduleFromTelldus(silent: Boolean = true, force: Boolean = false) {
     val auth = _uiState.value.authConfig
     val deviceId = auth.selectedDeviceId ?: return
+
+    // 1. Fast path on home Wi-Fi: read schedule metadata directly from the local TellStick ZNet
+    //    via /api/sensor/info (< 20ms, zero rate limits, never hits Telldus Cloud 429).
+    val localMetaStr = apiClient.getLocalScheduleMetadata(auth, deviceId)
+    val localParsed = HeaterScheduleConfig.parseFromMethodValue(localMetaStr)
+    if (localParsed != null) {
+      val current = _uiState.value.scheduleConfig
+      val preHeat = localParsed.preHeatMinutes ?: current.preHeatMinutes
+      val postHeat = localParsed.autoOffOffsetMinutes ?: current.autoOffOffsetMinutes
+      val readyTime = java.time.LocalTime.of(localParsed.readyHour, localParsed.readyMinute)
+      val activeDays = localParsed.activeWeekdays ?: current.activeWeekdays
+      var isEnabled = localParsed.active ?: current.enabled
+      val targetDate = localParsed.targetDate
+
+      if (isEnabled && activeDays.isEmpty() && !targetDate.isNullOrBlank()) {
+        val runDate = runCatching { java.time.LocalDate.parse(targetDate) }.getOrNull()
+        if (runDate != null) {
+          val graceMinutes = if (_uiState.value.isHeaterOn == false) 1L else 6L
+          val disarmDateTime = runDate.atTime(readyTime).plusMinutes(postHeat.toLong() + graceMinutes)
+          if (java.time.LocalDateTime.now().isAfter(disarmDateTime)) {
+            isEnabled = false
+          }
+        }
+      }
+
+      val syncedConfig =
+        current.copy(
+          enabled = isEnabled,
+          readyHour = readyTime.hour,
+          readyMinute = readyTime.minute,
+          preHeatMinutes = preHeat,
+          autoOffOffsetMinutes = postHeat,
+          activeWeekdays = activeDays,
+          targetDate = targetDate,
+        )
+      storage?.saveScheduleConfig(syncedConfig)
+      _uiState.update {
+        it.copy(
+          scheduleConfig = syncedConfig,
+          heatingWindow = HeaterScheduleCalculator.calculate(syncedConfig),
+          stagedReadyHour = readyTime.hour,
+          stagedReadyMinute = readyTime.minute,
+        )
+      }
+      if (localParsed.active == true && !isEnabled) {
+        syncScheduleToTelldus(syncedConfig)
+      }
+      return
+    }
+
+    // 2. Fallback when away from home (or if Local ZNet has no metadata yet): query Telldus Cloud
     if (!auth.hasCloudCredentials) return
     val now = System.currentTimeMillis()
-    if (!force && now - lastScheduleSyncTimeMs < 45_000L) return
+    if (!force && now - lastScheduleSyncTimeMs < 60_000L) return
 
     runCatching {
       val cloudDeviceId = apiClient.resolveCloudDeviceId(auth, deviceId)
@@ -820,6 +871,12 @@ class MainScreenViewModel(
             stagedReadyMinute = readyTime.minute,
           )
         }
+        apiClient.saveLocalScheduleMetadata(
+          auth = auth,
+          deviceId = deviceId,
+          deviceName = auth.selectedDeviceName,
+          metadata = syncedConfig.toMethodValueString(targetDate),
+        )
 
         // If a single-run schedule just completed and was auto-disarmed, or OFF job is out of sync, update Telldus
         if ((onJob.active && !isEnabled) || (offJob != null && offJob.active != isEnabled)) {
@@ -886,6 +943,22 @@ class MainScreenViewModel(
           }
         }
 
+        val targetDate = if (config.activeWeekdays.isEmpty()) {
+          config.targetDate ?: window.nextReadyDateTime.toLocalDate().toString()
+        } else {
+          null
+        }
+        val methodValueMetadata = config.toMethodValueString(targetDate)
+
+        // Immediately persist schedule metadata on the local TellStick ZNet (< 20ms, zero rate limits)
+        // so any other phone on home Wi-Fi sees the updated schedule right away on swipe-down.
+        apiClient.saveLocalScheduleMetadata(
+          auth = auth,
+          deviceId = deviceId,
+          deviceName = auth.selectedDeviceName,
+          metadata = methodValueMetadata,
+        )
+
         // Query existing jobs for this device on Telldus only when job IDs are not yet cached
         val cloudDeviceId = apiClient.resolveCloudDeviceId(auth, deviceId)
         val knownOnId = config.turnOnJobId?.takeIf { it > 0 }
@@ -907,12 +980,6 @@ class MainScreenViewModel(
             }
             (knownOnId ?: existingOnJob?.id ?: 0) to (knownOffId ?: existingOffJob?.id ?: 0)
           }
-        val targetDate = if (config.activeWeekdays.isEmpty()) {
-          config.targetDate ?: window.nextReadyDateTime.toLocalDate().toString()
-        } else {
-          null
-        }
-        val methodValueMetadata = config.toMethodValueString(targetDate)
 
         val onJob =
           TelldusScheduleJob(

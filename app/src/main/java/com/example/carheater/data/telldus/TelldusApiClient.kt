@@ -322,7 +322,7 @@ class TelldusApiClient {
             val s = sensors.optJSONObject(i) ?: continue
             val sensorLocalId = s.optString("sensorId", "").toIntOrNull()
             val sensorCloudId = s.optInt("id", 0)
-            val sName = s.optString("name", "").trim()
+            val sName = s.optString("name", "").substringBefore("|").trim()
             val idMatches = (cloudId > 0 && sensorCloudId == cloudId) ||
               (localId > 0 && sensorLocalId == localId)
             val nameMatches =
@@ -359,6 +359,73 @@ class TelldusApiClient {
     }
     return null
   }
+
+  /**
+   * Stores the serialized schedule metadata string directly on the local TellStick ZNet Lite v2
+   * inside the switch sensor's `name` field (`<deviceName>|<metadata>` via `/api/sensor/setName`).
+   * This enables instant (< 20ms), rate-limit-free schedule synchronization across multiple phones
+   * on the home Wi-Fi network without hitting Telldus Cloud's HTTP 429 rate limiter.
+   */
+  suspend fun saveLocalScheduleMetadata(
+    auth: AuthConfig,
+    deviceId: Int,
+    deviceName: String,
+    metadata: String,
+  ): Boolean =
+    withContext(Dispatchers.IO) {
+      if (auth.localIp.isBlank() || auth.localBearerToken.isBlank()) return@withContext false
+      val localId = toLocalDeviceId(deviceId)
+      val baseName = deviceName.substringBefore("|").trim().ifBlank { "Heater" }
+      runCatching {
+        val responseText =
+          callLocalZNetEndpoint(
+            auth = auth,
+            path = "sensor/setName",
+            queryParams =
+              mapOf(
+                "id" to localId.toString(),
+                "name" to "$baseName|$metadata",
+              ),
+          )
+        val obj = JSONObject(responseText)
+        checkForApiError(obj, responseText)
+        markLocalSucceeded()
+        true
+      }.getOrDefault(false)
+    }
+
+  /**
+   * Reads the serialized schedule metadata string stored on the local TellStick ZNet Lite v2
+   * from `/api/sensor/info?id=<localId>`. Returns `null` if Local ZNet is unreachable or no
+   * metadata has been stored yet.
+   */
+  suspend fun getLocalScheduleMetadata(
+    auth: AuthConfig,
+    deviceId: Int,
+  ): String? =
+    withContext(Dispatchers.IO) {
+      if (auth.localIp.isBlank() || auth.localBearerToken.isBlank() || !isLocalReachable()) {
+        return@withContext null
+      }
+      val localId = toLocalDeviceId(deviceId)
+      runCatching {
+        val responseText =
+          callLocalZNetEndpoint(
+            auth = auth,
+            path = "sensor/info",
+            queryParams = mapOf("id" to localId.toString()),
+          )
+        val obj = JSONObject(responseText)
+        checkForApiError(obj, responseText)
+        markLocalSucceeded()
+        val rawName = obj.optString("name", "")
+        if (rawName.contains("|")) {
+          rawName.substringAfter("|").trim().ifBlank { null }
+        } else {
+          null
+        }
+      }.getOrNull()
+    }
 
   /**
    * Immediately turns ON the specified device (`device/turnOn`).
