@@ -17,21 +17,27 @@ class HeaterStorage(context: Context) {
       if (prefs.contains("selected_device_id")) {
         prefs.getInt("selected_device_id", -1).takeIf { it > 0 }
       } else {
-        null
+        111
       }
 
     return AuthConfig(
       connectionMode = mode,
-      localIp = prefs.getString("local_ip", "") ?: "",
-      localBearerToken = prefs.getString("local_bearer_token", "") ?: "",
+      localIp = prefs.getString("local_ip", "")?.ifBlank { null } ?: DEFAULT_LOCAL_IP,
+      localBearerToken =
+        prefs.getString("local_bearer_token", "")?.ifBlank { null } ?: DEFAULT_LOCAL_BEARER_TOKEN,
       pendingRequestToken = prefs.getString("pending_request_token", "") ?: "",
       pendingAuthUrl = prefs.getString("pending_auth_url", "") ?: "",
-      cloudPublicKey = prefs.getString("cloud_public_key", "") ?: "",
-      cloudPrivateKey = prefs.getString("cloud_private_key", "") ?: "",
-      cloudToken = prefs.getString("cloud_token", "") ?: "",
-      cloudTokenSecret = prefs.getString("cloud_token_secret", "") ?: "",
+      cloudPublicKey =
+        prefs.getString("cloud_public_key", "")?.ifBlank { null } ?: DEFAULT_CLOUD_PUBLIC_KEY,
+      cloudPrivateKey =
+        prefs.getString("cloud_private_key", "")?.ifBlank { null } ?: DEFAULT_CLOUD_PRIVATE_KEY,
+      cloudToken =
+        prefs.getString("cloud_token", "")?.ifBlank { null } ?: DEFAULT_CLOUD_TOKEN,
+      cloudTokenSecret =
+        prefs.getString("cloud_token_secret", "")?.ifBlank { null } ?: DEFAULT_CLOUD_TOKEN_SECRET,
       selectedDeviceId = selectedId,
-      selectedDeviceName = prefs.getString("selected_device_name", "") ?: "",
+      selectedDeviceName =
+        prefs.getString("selected_device_name", "")?.ifBlank { null } ?: DEFAULT_DEVICE_NAME,
     )
   }
 
@@ -173,5 +179,16 @@ class HeaterStorage(context: Context) {
     current[localId] = cloudId
     val serialized = current.entries.joinToString(";") { "${it.key}:${it.value}" }
     prefs.edit().putString("device_mappings", serialized).apply()
+  }
+
+  companion object {
+    private const val DEFAULT_LOCAL_IP = "192.168.1.17"
+    private const val DEFAULT_LOCAL_BEARER_TOKEN =
+      "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCIsImF1ZCI6IkNhckhlYXRlciIsImV4cCI6MTgyNDMwNDc3NH0.e30.Oozx2yHNEsI0M7URjd2GenBQO__0cFTC77uhrljfgWg"
+    private const val DEFAULT_CLOUD_PUBLIC_KEY = "FEHUVEW84RAFR5SP22RABURUPHAFRUNU"
+    private const val DEFAULT_CLOUD_PRIVATE_KEY = "ZUXEVEGA9USTAZEWRETHAQUBUR69U6EF"
+    private const val DEFAULT_CLOUD_TOKEN = "4eaaaf53ce9a55cc8a92a210fa36edff069cfafd6"
+    private const val DEFAULT_CLOUD_TOKEN_SECRET = "884f66e31344382d814d63b46327e0e7"
+    private const val DEFAULT_DEVICE_NAME = "Belysning Pergola"
   }
 }

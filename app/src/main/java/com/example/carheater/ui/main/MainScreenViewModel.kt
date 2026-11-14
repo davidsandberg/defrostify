@@ -56,6 +56,7 @@ class MainScreenViewModel(
   private var lastLocalTriggerKey: String = ""
   private var lastManualCommandTimeMs: Long = 0L
   private var lastManualCommandTargetOn: Boolean? = null
+  private var lastScheduleSyncTimeMs: Long = 0L
 
   init {
     TelldusApiClient.onDeviceMappingRegistered = { lId, cId ->
@@ -437,10 +438,17 @@ class MainScreenViewModel(
           }
         }
         .onFailure { err ->
+          val isRateLimit =
+            err.message?.contains("429", ignoreCase = true) == true ||
+              err.message?.contains("rate limit", ignoreCase = true) == true ||
+              err.message?.contains("too many requests", ignoreCase = true) == true
           _uiState.update {
             it.copy(
               isBusy = false,
-              errorMessage = err.message ?: "Failed to load devices.",
+              errorMessage = if (isRateLimit) null else (err.message ?: "Failed to load devices."),
+              statusMessage =
+                if (isRateLimit) "Telldus Cloud rate limit active — using local switch configuration."
+                else it.statusMessage,
             )
           }
         }
@@ -530,10 +538,19 @@ class MainScreenViewModel(
         checkAndDisarmOneShotSchedule()
       }
       .onFailure { err ->
+        val isRateLimit =
+          err.message?.contains("429", ignoreCase = true) == true ||
+            err.message?.contains("rate limit", ignoreCase = true) == true ||
+            err.message?.contains("too many requests", ignoreCase = true) == true
         _uiState.update {
           it.copy(
             isBusy = false,
-            errorMessage = if (silent) it.errorMessage else (err.message ?: "Failed to query switch status."),
+            errorMessage =
+              if (silent || isRateLimit) it.errorMessage
+              else (err.message ?: "Failed to query switch status."),
+            statusMessage =
+              if (!silent && isRateLimit) "Telldus Cloud rate limit active — using last known status."
+              else it.statusMessage,
           )
         }
       }
@@ -722,10 +739,13 @@ class MainScreenViewModel(
     syncScheduleToTelldus(updated)
   }
 
-  fun syncScheduleFromTelldus(silent: Boolean = true) {
+  fun syncScheduleFromTelldus(silent: Boolean = true, force: Boolean = false) {
     val auth = _uiState.value.authConfig
     val deviceId = auth.selectedDeviceId ?: return
     if (!auth.hasCloudCredentials) return
+    val now = System.currentTimeMillis()
+    if (!force && now - lastScheduleSyncTimeMs < 45_000L) return
+    lastScheduleSyncTimeMs = now
 
     viewModelScope.launch {
       runCatching {

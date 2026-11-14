@@ -689,8 +689,8 @@ class TelldusApiClient {
       url = fullUrl,
       method = "GET",
       headers = mapOf("Authorization" to "Bearer ${auth.localBearerToken.trim()}"),
-      connectTimeoutMs = 1200,
-      readTimeoutMs = 2500,
+      connectTimeoutMs = 2500,
+      readTimeoutMs = 4500,
     )
   }
 
@@ -710,12 +710,24 @@ class TelldusApiClient {
           }
       }
     val fullUrl = "$baseEndpoint$queryString"
+    val isWriteCall =
+      path.startsWith("scheduler/setJob") ||
+        path.startsWith("scheduler/removeJob") ||
+        path.startsWith("device/turn")
+
+    // If Telldus Cloud recently returned HTTP 429, fail fast on read-only calls so the UI never freezes
+    if (!isWriteCall && System.currentTimeMillis() < cloudRateLimitedUntilMs) {
+      throw TelldusApiException("Telldus Cloud rate limit cooldown active", httpCode = 429)
+    }
 
     return cloudRateLimitMutex.withLock {
+      if (!isWriteCall && System.currentTimeMillis() < cloudRateLimitedUntilMs) {
+        throw TelldusApiException("Telldus Cloud rate limit cooldown active", httpCode = 429)
+      }
       var lastError: TelldusApiException? = null
-      val minIntervalMs = if (path.startsWith("scheduler/setJob")) 5800L else 1200L
-      val backoffDelaysMs = longArrayOf(6_000L, 12_000L, 20_000L)
-      for (attempt in 1..4) {
+      val minIntervalMs = if (path.startsWith("scheduler/setJob")) 4500L else 1200L
+      val maxAttempts = if (isWriteCall) 2 else 1
+      for (attempt in 1..maxAttempts) {
         val now = System.currentTimeMillis()
         val elapsed = now - lastCloudCallTimestampMs
         if (elapsed in 0 until minIntervalMs) {
@@ -746,15 +758,18 @@ class TelldusApiClient {
           val isRateLimited = e.httpCode == 429 ||
             e.message?.contains("429", ignoreCase = true) == true ||
             e.message?.contains("too many requests", ignoreCase = true) == true
-          if (isRateLimited && attempt <= backoffDelaysMs.size) {
-            delay(backoffDelaysMs[attempt - 1])
-            lastCloudCallTimestampMs = System.currentTimeMillis()
-            continue
+          if (isRateLimited) {
+            cloudRateLimitedUntilMs = System.currentTimeMillis() + 45_000L
+            if (isWriteCall && attempt < maxAttempts) {
+              delay(4_500L)
+              lastCloudCallTimestampMs = System.currentTimeMillis()
+              continue
+            }
           }
           throw e
         }
       }
-      throw lastError ?: TelldusApiException("Cloud API request failed after retries")
+      throw lastError ?: TelldusApiException("Cloud API request failed")
     }
   }
 
@@ -923,13 +938,14 @@ class TelldusApiClient {
       java.util.concurrent.ConcurrentHashMap<String, String>()
     private val cloudRateLimitMutex = Mutex()
     @Volatile private var lastCloudCallTimestampMs: Long = 0L
+    @Volatile private var cloudRateLimitedUntilMs: Long = 0L
     @Volatile private var lastLocalFailureTimestampMs: Long = 0L
     private val cachedCloudWattMap = java.util.concurrent.ConcurrentHashMap<Int, Pair<Long, Double>>()
 
     fun isLocalReachable(): Boolean {
       val now = System.currentTimeMillis()
       val lastFailure = lastLocalFailureTimestampMs
-      return lastFailure == 0L || (now - lastFailure > 60_000L)
+      return lastFailure == 0L || (now - lastFailure > 15_000L)
     }
 
     fun markLocalFailed() {
