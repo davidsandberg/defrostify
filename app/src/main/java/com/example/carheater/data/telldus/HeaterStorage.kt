@@ -143,4 +143,27 @@ class HeaterStorage(context: Context) {
     val serialized = existing.take(3).joinToString(";") { "${it.first}:${it.second}" }
     prefs.edit().putString("recent_ready_times", serialized).apply()
   }
+
+  fun loadDeviceMappings(): Map<Int, Int> {
+    val raw = prefs.getString("device_mappings", "") ?: ""
+    if (raw.isBlank()) return emptyMap()
+    return raw.split(";")
+      .mapNotNull { entry ->
+        val parts = entry.split(":")
+        if (parts.size == 2) {
+          val local = parts[0].toIntOrNull()
+          val cloud = parts[1].toIntOrNull()
+          if (local != null && cloud != null) local to cloud else null
+        } else null
+      }
+      .toMap()
+  }
+
+  fun saveDeviceMapping(localId: Int, cloudId: Int) {
+    if (localId <= 0 || cloudId <= 0) return
+    val current = loadDeviceMappings().toMutableMap()
+    current[localId] = cloudId
+    val serialized = current.entries.joinToString(";") { "${it.key}:${it.value}" }
+    prefs.edit().putString("device_mappings", serialized).apply()
+  }
 }

@@ -23,10 +23,13 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -84,7 +87,7 @@ fun MainScreen(
     onOpenAuthDialog = viewModel::openAuthDialog,
     onTurnOnHeater = { viewModel.setHeaterPower(true) },
     onTurnOffHeater = { viewModel.setHeaterPower(false) },
-    onRefreshStatus = { viewModel.refreshSwitchState(silent = false) },
+    onRefreshStatus = viewModel::manualRefresh,
     onReadyTimeChanged = viewModel::updateReadyTime,
     onSelectRecentTime = viewModel::selectRecentTime,
     onCommitScheduleTime = viewModel::commitScheduleTime,
@@ -118,6 +121,7 @@ fun MainScreen(
   }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun MainScreenContent(
   state: HeaterUiState,
@@ -133,13 +137,21 @@ internal fun MainScreenContent(
   onSyncSchedule: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  Column(
-    modifier =
-      modifier
-        .fillMaxSize()
-        .verticalScroll(rememberScrollState()),
-    verticalArrangement = Arrangement.spacedBy(10.dp),
+  val pullRefreshState = rememberPullToRefreshState()
+
+  PullToRefreshBox(
+    isRefreshing = state.isRefreshing,
+    onRefresh = onRefreshStatus,
+    state = pullRefreshState,
+    modifier = modifier.fillMaxSize(),
   ) {
+    Column(
+      modifier =
+        Modifier
+          .fillMaxSize()
+          .verticalScroll(rememberScrollState()),
+      verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
     // Top Header Bar
     Column(
       modifier = Modifier.fillMaxWidth(),
@@ -242,6 +254,7 @@ internal fun MainScreenContent(
     )
   }
 }
+}
 
 @Composable
 private fun SwitchStatusBadge(
@@ -261,15 +274,19 @@ private fun SwitchStatusBadge(
       null -> MaterialTheme.colorScheme.onSurfaceVariant
     }
   val wattSuffix =
-    powerWatts?.let { w ->
-      val formatted =
-        when {
-          w < 0.05 -> "0 W"
-          w < 10.0 -> String.format(java.util.Locale.US, "%.1f W", w)
-          else -> "${kotlin.math.round(w).toInt()} W"
-        }
-      " · $formatted"
-    }.orEmpty()
+    when {
+      isHeaterOn == false -> " · 0 W"
+      powerWatts != null -> {
+        val formatted =
+          when {
+            powerWatts < 0.05 -> "0 W"
+            powerWatts < 10.0 -> String.format(java.util.Locale.US, "%.1f W", powerWatts)
+            else -> "${kotlin.math.round(powerWatts).toInt()} W"
+          }
+        " · $formatted"
+      }
+      else -> ""
+    }
   val label =
     when (isHeaterOn) {
       true -> "● ON$wattSuffix"

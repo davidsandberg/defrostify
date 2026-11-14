@@ -33,6 +33,7 @@ data class HeaterUiState(
   val availableDevices: List<TelldusDevice> = emptyList(),
   val discoveredTellSticks: List<DiscoveredTellStick> = emptyList(),
   val isBusy: Boolean = false,
+  val isRefreshing: Boolean = false,
   val isSyncingSchedule: Boolean = false,
   val showAuthDialog: Boolean = false,
   val statusMessage: String? = null,
@@ -55,6 +56,13 @@ class MainScreenViewModel(
   private var lastLocalTriggerKey: String = ""
 
   init {
+    TelldusApiClient.onDeviceMappingRegistered = { lId, cId ->
+      storage?.saveDeviceMapping(lId, cId)
+    }
+    storage?.loadDeviceMappings()?.forEach { (lId, cId) ->
+      TelldusApiClient.registerDeviceMapping(lId, cId)
+    }
+
     val loadedAuth = storage?.loadAuthConfig() ?: AuthConfig()
     val loadedSchedule = storage?.loadScheduleConfig() ?: HeaterScheduleConfig()
     val recentTimes = storage?.loadRecentTimes() ?: listOf(Pair(7, 30), Pair(8, 0), Pair(16, 30))
@@ -290,9 +298,15 @@ class MainScreenViewModel(
     if (auth.pendingRequestToken.isNotBlank() && auth.localBearerToken.isBlank()) {
       completeLocalBrowserAuth(silentIfPending = true)
     } else if (auth.isAuthenticated && auth.selectedDeviceId != null) {
+      // Immediately refresh switch status and schedule upon resume
       refreshSwitchState(silent = true)
       if (auth.hasCloudCredentials) {
         syncScheduleFromTelldus(silent = true)
+      }
+      // Follow-up refresh after 2.5s to ensure Wi-Fi re-association after screen unlock has completed
+      viewModelScope.launch {
+        delay(2500L)
+        refreshSwitchState(silent = true)
       }
     } else {
       // Refresh countdown calculation
@@ -313,9 +327,9 @@ class MainScreenViewModel(
     statusPollJob =
       viewModelScope.launch {
         while (true) {
-          // When on local Wi-Fi, poll every 5s.
-          // When remote (Cloud), poll every 120s to strictly avoid hitting Telldus Cloud's 429 rate limit.
-          val intervalMs = if (TelldusApiClient.isLocalReachable()) 5000L else 120_000L
+          // When on local Wi-Fi, poll every 15s.
+          // When remote (Cloud), poll every 60s (~1 minute) while app is active.
+          val intervalMs = if (TelldusApiClient.isLocalReachable()) 15_000L else 60_000L
           delay(intervalMs)
           val current = _uiState.value
           val auth = current.authConfig
@@ -329,6 +343,21 @@ class MainScreenViewModel(
           }
         }
       }
+  }
+
+  fun manualRefresh() {
+    viewModelScope.launch {
+      _uiState.update { it.copy(isRefreshing = true, errorMessage = null) }
+      try {
+        refreshSwitchState(silent = false)
+        val auth = _uiState.value.authConfig
+        if (auth.hasCloudCredentials) {
+          syncScheduleFromTelldus(silent = true)
+        }
+      } finally {
+        _uiState.update { it.copy(isRefreshing = false) }
+      }
+    }
   }
 
   fun fetchDevices(authOverride: AuthConfig? = null) {
@@ -753,7 +782,7 @@ class MainScreenViewModel(
         val onJob =
           TelldusScheduleJob(
             id = targetOnId,
-            deviceId = deviceId,
+            deviceId = cloudDeviceId,
             method = TelldusMethods.TURNON,
             methodValue = methodValueMetadata,
             hour = window.startTime.hour,
@@ -771,7 +800,7 @@ class MainScreenViewModel(
         val offJob =
           TelldusScheduleJob(
             id = targetOffId,
-            deviceId = deviceId,
+            deviceId = cloudDeviceId,
             method = TelldusMethods.TURNOFF,
             methodValue = "",
             hour = window.stopTime.hour,
@@ -815,14 +844,13 @@ class MainScreenViewModel(
         }
         .onFailure { err ->
           startStatusPolling()
+          _uiState.update { it.copy(isSyncingSchedule = false, isBusy = false) }
           if (err is kotlinx.coroutines.CancellationException) return@onFailure
           if (err.message?.contains("too many requests", ignoreCase = true) == true ||
             err.message?.contains("429", ignoreCase = true) == true
           ) {
             _uiState.update {
               it.copy(
-                isBusy = false,
-                isSyncingSchedule = false,
                 errorMessage = null,
                 statusMessage = "Schedule saved locally. Telldus Cloud rate limit reached — retry in a few minutes.",
               )
@@ -831,8 +859,6 @@ class MainScreenViewModel(
           }
           _uiState.update {
             it.copy(
-              isBusy = false,
-              isSyncingSchedule = false,
               errorMessage = "Failed to sync schedule to TellStick (${err.message}).",
             )
           }
