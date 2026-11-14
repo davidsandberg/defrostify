@@ -77,13 +77,13 @@ class HeaterStorage(context: Context) {
       if (prefs.contains("turn_on_job_id")) {
         prefs.getInt("turn_on_job_id", -1).takeIf { it > 0 }
       } else {
-        null
+        85962992
       }
     val turnOffJobId =
       if (prefs.contains("turn_off_job_id")) {
         prefs.getInt("turn_off_job_id", -1).takeIf { it > 0 }
       } else {
-        null
+        85962994
       }
 
     val targetDate = prefs.getString("target_date", null)

@@ -304,14 +304,14 @@ class MainScreenViewModel(
       // Immediately refresh switch status and schedule upon resume
       refreshSwitchState(silent = true)
       if (auth.hasCloudCredentials) {
-        syncScheduleFromTelldus(silent = true)
+        syncScheduleFromTelldus(silent = true, force = true)
+      } else {
+        checkAndDisarmOneShotSchedule()
       }
-      checkAndDisarmOneShotSchedule()
       // Follow-up refresh after 2.5s to ensure Wi-Fi re-association after screen unlock has completed
       viewModelScope.launch {
         delay(2500L)
         refreshSwitchState(silent = true)
-        checkAndDisarmOneShotSchedule()
       }
     } else {
       // Refresh countdown calculation
@@ -341,7 +341,12 @@ class MainScreenViewModel(
         val disarmDateTime = runDate.atTime(java.time.LocalTime.of(sched.readyHour, sched.readyMinute))
           .plusMinutes(sched.autoOffOffsetMinutes.toLong() + graceMinutes)
         if (java.time.LocalDateTime.now().isAfter(disarmDateTime)) {
-          setScheduleEnabled(false)
+          if (state.authConfig.hasCloudCredentials) {
+            // Sync from Telldus first so we never clobber a newer schedule set from another phone
+            syncScheduleFromTelldus(silent = true, force = true)
+          } else {
+            setScheduleEnabled(false)
+          }
         }
       }
     }
@@ -362,6 +367,9 @@ class MainScreenViewModel(
           val deviceId = auth.selectedDeviceId
           if (auth.isAuthenticated && deviceId != null) {
             refreshSwitchState(silent = true)
+            if (auth.hasCloudCredentials && !current.isSyncingSchedule) {
+              syncScheduleFromTelldus(silent = true, force = false)
+            }
           } else {
             _uiState.update {
               it.copy(heatingWindow = HeaterScheduleCalculator.calculate(it.scheduleConfig))
@@ -376,11 +384,12 @@ class MainScreenViewModel(
       _uiState.update { it.copy(isRefreshing = true, errorMessage = null) }
       try {
         TelldusApiClient.markLocalSucceeded()
-        checkAndDisarmOneShotSchedule()
         performRefreshSwitchState(silent = false)
         val auth = _uiState.value.authConfig
         if (auth.hasCloudCredentials) {
-          syncScheduleFromTelldus(silent = true)
+          performSyncScheduleFromTelldus(silent = false, force = true)
+        } else {
+          checkAndDisarmOneShotSchedule()
         }
       } finally {
         _uiState.update { it.copy(isRefreshing = false) }
@@ -740,77 +749,81 @@ class MainScreenViewModel(
   }
 
   fun syncScheduleFromTelldus(silent: Boolean = true, force: Boolean = false) {
+    viewModelScope.launch {
+      performSyncScheduleFromTelldus(silent = silent, force = force)
+    }
+  }
+
+  private suspend fun performSyncScheduleFromTelldus(silent: Boolean = true, force: Boolean = false) {
     val auth = _uiState.value.authConfig
     val deviceId = auth.selectedDeviceId ?: return
     if (!auth.hasCloudCredentials) return
     val now = System.currentTimeMillis()
     if (!force && now - lastScheduleSyncTimeMs < 45_000L) return
-    lastScheduleSyncTimeMs = now
 
-    viewModelScope.launch {
-      runCatching {
-        val cloudDeviceId = apiClient.resolveCloudDeviceId(auth, deviceId)
-        val jobs = apiClient.listScheduleJobs(auth).filter { it.deviceId == cloudDeviceId }
-        val onJob = jobs.firstOrNull { it.method == TelldusMethods.TURNON }
-        val offJob = jobs.firstOrNull { it.method == TelldusMethods.TURNOFF }
-        Triple(onJob, offJob, cloudDeviceId)
-      }.onSuccess { (onJob, offJob, _) ->
-        if (onJob != null) {
-          val current = _uiState.value.scheduleConfig
-          val parsedMeta = HeaterScheduleConfig.parseFromMethodValue(onJob.methodValue)
-          val preHeat = parsedMeta?.preHeatMinutes ?: current.preHeatMinutes
-          val postHeat = parsedMeta?.autoOffOffsetMinutes ?: current.autoOffOffsetMinutes
-          val readyTime = if (parsedMeta != null) {
-            java.time.LocalTime.of(parsedMeta.readyHour, parsedMeta.readyMinute)
-          } else {
-            val onTime = java.time.LocalTime.of(onJob.hour.coerceIn(0, 23), onJob.minute.coerceIn(0, 59))
-            onTime.plusMinutes(preHeat.toLong())
-          }
-          val activeDays = parsedMeta?.activeWeekdays ?: run {
-            onJob.weekdays.split(",").mapNotNull { it.trim().toIntOrNull() }.filter { it in 1..7 }.toSet()
-          }
+    runCatching {
+      val cloudDeviceId = apiClient.resolveCloudDeviceId(auth, deviceId)
+      val jobs = apiClient.listScheduleJobs(auth).filter { it.deviceId == cloudDeviceId }
+      val onJob = jobs.firstOrNull { it.method == TelldusMethods.TURNON }
+      val offJob = jobs.firstOrNull { it.method == TelldusMethods.TURNOFF }
+      Triple(onJob, offJob, cloudDeviceId)
+    }.onSuccess { (onJob, offJob, _) ->
+      lastScheduleSyncTimeMs = System.currentTimeMillis()
+      if (onJob != null) {
+        val current = _uiState.value.scheduleConfig
+        val parsedMeta = HeaterScheduleConfig.parseFromMethodValue(onJob.methodValue)
+        val preHeat = parsedMeta?.preHeatMinutes ?: current.preHeatMinutes
+        val postHeat = parsedMeta?.autoOffOffsetMinutes ?: current.autoOffOffsetMinutes
+        val readyTime = if (parsedMeta != null) {
+          java.time.LocalTime.of(parsedMeta.readyHour, parsedMeta.readyMinute)
+        } else {
+          val onTime = java.time.LocalTime.of(onJob.hour.coerceIn(0, 23), onJob.minute.coerceIn(0, 59))
+          onTime.plusMinutes(preHeat.toLong())
+        }
+        val activeDays = parsedMeta?.activeWeekdays ?: run {
+          onJob.weekdays.split(",").mapNotNull { it.trim().toIntOrNull() }.filter { it in 1..7 }.toSet()
+        }
 
-          var isEnabled = onJob.active
-          val targetDate = parsedMeta?.targetDate
+        var isEnabled = onJob.active
+        val targetDate = parsedMeta?.targetDate
 
-          // Auto-disarm single-occurrence schedule once stop time + grace period has passed
-          if (isEnabled && activeDays.isEmpty() && !targetDate.isNullOrBlank()) {
-            val runDate = runCatching { java.time.LocalDate.parse(targetDate) }.getOrNull()
-            if (runDate != null) {
-              val graceMinutes = if (_uiState.value.isHeaterOn == false) 1L else 6L
-              val disarmDateTime = runDate.atTime(readyTime).plusMinutes(postHeat.toLong() + graceMinutes)
-              if (java.time.LocalDateTime.now().isAfter(disarmDateTime)) {
-                isEnabled = false
-              }
+        // Auto-disarm single-occurrence schedule once stop time + grace period has passed
+        if (isEnabled && activeDays.isEmpty() && !targetDate.isNullOrBlank()) {
+          val runDate = runCatching { java.time.LocalDate.parse(targetDate) }.getOrNull()
+          if (runDate != null) {
+            val graceMinutes = if (_uiState.value.isHeaterOn == false) 1L else 6L
+            val disarmDateTime = runDate.atTime(readyTime).plusMinutes(postHeat.toLong() + graceMinutes)
+            if (java.time.LocalDateTime.now().isAfter(disarmDateTime)) {
+              isEnabled = false
             }
           }
+        }
 
-          val syncedConfig =
-            current.copy(
-              enabled = isEnabled,
-              readyHour = readyTime.hour,
-              readyMinute = readyTime.minute,
-              preHeatMinutes = preHeat,
-              autoOffOffsetMinutes = postHeat,
-              activeWeekdays = activeDays,
-              turnOnJobId = onJob.id,
-              turnOffJobId = offJob?.id ?: current.turnOffJobId,
-              targetDate = targetDate,
-            )
-          storage?.saveScheduleConfig(syncedConfig)
-          _uiState.update {
-            it.copy(
-              scheduleConfig = syncedConfig,
-              heatingWindow = HeaterScheduleCalculator.calculate(syncedConfig),
-              stagedReadyHour = readyTime.hour,
-              stagedReadyMinute = readyTime.minute,
-            )
-          }
+        val syncedConfig =
+          current.copy(
+            enabled = isEnabled,
+            readyHour = readyTime.hour,
+            readyMinute = readyTime.minute,
+            preHeatMinutes = preHeat,
+            autoOffOffsetMinutes = postHeat,
+            activeWeekdays = activeDays,
+            turnOnJobId = onJob.id,
+            turnOffJobId = offJob?.id ?: current.turnOffJobId,
+            targetDate = targetDate,
+          )
+        storage?.saveScheduleConfig(syncedConfig)
+        _uiState.update {
+          it.copy(
+            scheduleConfig = syncedConfig,
+            heatingWindow = HeaterScheduleCalculator.calculate(syncedConfig),
+            stagedReadyHour = readyTime.hour,
+            stagedReadyMinute = readyTime.minute,
+          )
+        }
 
-          // If a single-run schedule just completed and was auto-disarmed, deactivate on Telldus
-          if (onJob.active && !isEnabled) {
-            syncScheduleToTelldus(syncedConfig)
-          }
+        // If a single-run schedule just completed and was auto-disarmed, or OFF job is out of sync, update Telldus
+        if ((onJob.active && !isEnabled) || (offJob != null && offJob.active != isEnabled)) {
+          syncScheduleToTelldus(syncedConfig)
         }
       }
     }
@@ -873,22 +886,27 @@ class MainScreenViewModel(
           }
         }
 
-        // Query existing jobs for this device on Telldus to guarantee only 1 ON and 1 OFF job ever exist
+        // Query existing jobs for this device on Telldus only when job IDs are not yet cached
         val cloudDeviceId = apiClient.resolveCloudDeviceId(auth, deviceId)
-        val existingJobs = runCatching { apiClient.listScheduleJobs(auth) }.getOrDefault(emptyList())
-        val deviceJobs = existingJobs.filter { it.deviceId == cloudDeviceId }
-        val existingOnJob = deviceJobs.firstOrNull { it.method == TelldusMethods.TURNON }
-        val existingOffJob = deviceJobs.firstOrNull { it.method == TelldusMethods.TURNOFF }
+        val knownOnId = config.turnOnJobId?.takeIf { it > 0 }
+        val knownOffId = config.turnOffJobId?.takeIf { it > 0 }
+        val (targetOnId, targetOffId) =
+          if (knownOnId != null && knownOffId != null) {
+            knownOnId to knownOffId
+          } else {
+            val existingJobs = runCatching { apiClient.listScheduleJobs(auth) }.getOrDefault(emptyList())
+            val deviceJobs = existingJobs.filter { it.deviceId == cloudDeviceId }
+            val existingOnJob = deviceJobs.firstOrNull { it.method == TelldusMethods.TURNON }
+            val existingOffJob = deviceJobs.firstOrNull { it.method == TelldusMethods.TURNOFF }
 
-        // Remove any orphaned/duplicate jobs for this device beyond the primary pair
-        deviceJobs.forEach { job ->
-          if (job.id != existingOnJob?.id && job.id != existingOffJob?.id) {
-            apiClient.removeScheduleJob(auth, job.id)
+            // Remove any orphaned/duplicate jobs for this device beyond the primary pair
+            deviceJobs.forEach { job ->
+              if (job.id != existingOnJob?.id && job.id != existingOffJob?.id) {
+                apiClient.removeScheduleJob(auth, job.id)
+              }
+            }
+            (knownOnId ?: existingOnJob?.id ?: 0) to (knownOffId ?: existingOffJob?.id ?: 0)
           }
-        }
-
-        val targetOnId = config.turnOnJobId ?: existingOnJob?.id ?: 0
-        val targetOffId = config.turnOffJobId ?: existingOffJob?.id ?: 0
         val targetDate = if (config.activeWeekdays.isEmpty()) {
           config.targetDate ?: window.nextReadyDateTime.toLocalDate().toString()
         } else {

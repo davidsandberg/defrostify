@@ -412,7 +412,7 @@ class TelldusApiClient {
       val jobs = mutableListOf<TelldusScheduleJob>()
       for (i in 0 until jobArray.length()) {
         val obj = jobArray.optJSONObject(i) ?: continue
-        jobs.add(
+        val parsedJob =
           TelldusScheduleJob(
             id = obj.optInt("id"),
             deviceId = obj.optInt("deviceId"),
@@ -427,7 +427,10 @@ class TelldusApiClient {
             retries = obj.optInt("retries", 5),
             retryInterval = obj.optInt("retryInterval", 1),
           )
-        )
+        val jobKey = "${parsedJob.deviceId}:${parsedJob.method}"
+        lastSyncedJobSignatureCache[jobKey] =
+          "${parsedJob.id}:${parsedJob.deviceId}:${parsedJob.method}:${parsedJob.hour}:${parsedJob.minute}:${parsedJob.weekdays}:${parsedJob.active}:${parsedJob.methodValue}"
+        jobs.add(parsedJob)
       }
       jobs
     }
@@ -725,7 +728,7 @@ class TelldusApiClient {
         throw TelldusApiException("Telldus Cloud rate limit cooldown active", httpCode = 429)
       }
       var lastError: TelldusApiException? = null
-      val minIntervalMs = if (path.startsWith("scheduler/setJob")) 4500L else 1200L
+      val minIntervalMs = if (path.startsWith("scheduler/setJob")) 2000L else 1000L
       val maxAttempts = if (isWriteCall) 2 else 1
       for (attempt in 1..maxAttempts) {
         val now = System.currentTimeMillis()
