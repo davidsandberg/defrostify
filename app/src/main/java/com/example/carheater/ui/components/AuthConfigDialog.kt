@@ -81,6 +81,14 @@ fun AuthConfigDialog(
   }
   var showManualTokenField by remember { mutableStateOf(false) }
   var activePopupAuthUrl by remember { mutableStateOf<String?>(null) }
+  val appVersionLabel = remember(context) {
+    runCatching {
+      val pkgInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+      val vName = pkgInfo.versionName ?: "1.0"
+      val vCode = pkgInfo.longVersionCode
+      "v$vName ($vCode)"
+    }.getOrDefault("")
+  }
 
   Dialog(
     onDismissRequest = onDismiss,
@@ -112,11 +120,24 @@ fun AuthConfigDialog(
             },
           )
         } else {
-        Text(
-          text = "Configuration",
-          style = MaterialTheme.typography.titleLarge,
-          fontWeight = FontWeight.Bold,
-        )
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Text(
+            text = "Configuration",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+          )
+          if (appVersionLabel.isNotBlank()) {
+            Text(
+              text = appVersionLabel,
+              style = MaterialTheme.typography.labelMedium,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
+        }
 
         // 1. Switch Picker Section (Front and Center!)
         Row(
@@ -458,19 +479,27 @@ fun AuthConfigDialog(
 
         Row(
           modifier = Modifier.fillMaxWidth(),
-          horizontalArrangement = Arrangement.End,
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = Alignment.CenterVertically,
         ) {
-          TextButton(onClick = onDismiss) {
-            Text("Cancel")
-          }
-          Spacer(modifier = Modifier.width(8.dp))
-          Button(
-            onClick = {
-              onSaveAuthConfig(draft)
-              onDismiss()
+          Text(
+            text = if (appVersionLabel.isNotBlank()) "Defrostify $appVersionLabel" else "",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+          Row(verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = onDismiss) {
+              Text("Cancel")
             }
-          ) {
-            Text("Done")
+            Spacer(modifier = Modifier.width(8.dp))
+            Button(
+              onClick = {
+                onSaveAuthConfig(draft)
+                onDismiss()
+              }
+            ) {
+              Text("Done")
+            }
           }
         }
         }
