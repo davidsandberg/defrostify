@@ -780,23 +780,22 @@ class TelldusApiClient {
           }
       }
     val fullUrl = "$baseEndpoint$queryString"
-    val isWriteCall =
-      path.startsWith("scheduler/setJob") ||
-        path.startsWith("scheduler/removeJob") ||
+    val isSchedulerOrTurnCall =
+      path.startsWith("scheduler/") ||
         path.startsWith("device/turn")
 
-    // If Telldus Cloud recently returned HTTP 429, fail fast on read-only calls so the UI never freezes
-    if (!isWriteCall && System.currentTimeMillis() < cloudRateLimitedUntilMs) {
+    // If Telldus Cloud recently returned HTTP 429, fail fast on non-scheduler status/watt reads
+    if (!isSchedulerOrTurnCall && System.currentTimeMillis() < cloudRateLimitedUntilMs) {
       throw TelldusApiException("Telldus Cloud rate limit cooldown active", httpCode = 429)
     }
 
     return cloudRateLimitMutex.withLock {
-      if (!isWriteCall && System.currentTimeMillis() < cloudRateLimitedUntilMs) {
+      if (!isSchedulerOrTurnCall && System.currentTimeMillis() < cloudRateLimitedUntilMs) {
         throw TelldusApiException("Telldus Cloud rate limit cooldown active", httpCode = 429)
       }
       var lastError: TelldusApiException? = null
       val minIntervalMs = if (path.startsWith("scheduler/setJob")) 2000L else 1000L
-      val maxAttempts = if (isWriteCall) 2 else 1
+      val maxAttempts = if (isSchedulerOrTurnCall) 2 else 1
       for (attempt in 1..maxAttempts) {
         val now = System.currentTimeMillis()
         val elapsed = now - lastCloudCallTimestampMs
@@ -829,9 +828,9 @@ class TelldusApiClient {
             e.message?.contains("429", ignoreCase = true) == true ||
             e.message?.contains("too many requests", ignoreCase = true) == true
           if (isRateLimited) {
-            cloudRateLimitedUntilMs = System.currentTimeMillis() + 45_000L
-            if (isWriteCall && attempt < maxAttempts) {
-              delay(4_500L)
+            cloudRateLimitedUntilMs = System.currentTimeMillis() + 30_000L
+            if (isSchedulerOrTurnCall && attempt < maxAttempts) {
+              delay(3_500L)
               lastCloudCallTimestampMs = System.currentTimeMillis()
               continue
             }

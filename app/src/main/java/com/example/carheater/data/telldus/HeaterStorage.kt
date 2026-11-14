@@ -6,8 +6,15 @@ import android.content.SharedPreferences
 class HeaterStorage(context: Context) {
   private val prefs: SharedPreferences =
     context.getSharedPreferences("car_heater_prefs", Context.MODE_PRIVATE)
+  private val isFirebaseTestLab: Boolean =
+    runCatching {
+      android.provider.Settings.System.getString(context.contentResolver, "firebase.test.lab") == "true"
+    }.getOrDefault(false)
 
   fun loadAuthConfig(): AuthConfig {
+    if (isFirebaseTestLab) {
+      return AuthConfig()
+    }
     val modeName =
       prefs.getString("connection_mode", ConnectionMode.LOCAL_ZNET.name)
         ?: ConnectionMode.LOCAL_ZNET.name
