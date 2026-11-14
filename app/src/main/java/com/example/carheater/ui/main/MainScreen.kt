@@ -17,6 +17,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -84,6 +86,8 @@ fun MainScreen(
     onTurnOffHeater = { viewModel.setHeaterPower(false) },
     onRefreshStatus = { viewModel.refreshSwitchState(silent = false) },
     onReadyTimeChanged = viewModel::updateReadyTime,
+    onSelectRecentTime = viewModel::selectRecentTime,
+    onCommitScheduleTime = viewModel::commitScheduleTime,
     onToggleWeekday = viewModel::toggleWeekday,
     onSetScheduleEnabled = viewModel::setScheduleEnabled,
     onSyncSchedule = { viewModel.syncScheduleToTelldus() },
@@ -122,6 +126,8 @@ internal fun MainScreenContent(
   onTurnOffHeater: () -> Unit,
   onRefreshStatus: () -> Unit,
   onReadyTimeChanged: (Int, Int) -> Unit,
+  onSelectRecentTime: (Int, Int) -> Unit,
+  onCommitScheduleTime: () -> Unit,
   onToggleWeekday: (Int) -> Unit,
   onSetScheduleEnabled: (Boolean) -> Unit,
   onSyncSchedule: () -> Unit,
@@ -228,6 +234,8 @@ internal fun MainScreenContent(
     ScheduleConfigurationCard(
       state = state,
       onReadyTimeChanged = onReadyTimeChanged,
+      onSelectRecentTime = onSelectRecentTime,
+      onCommitScheduleTime = onCommitScheduleTime,
       onToggleWeekday = onToggleWeekday,
       onSetScheduleEnabled = onSetScheduleEnabled,
       onSyncSchedule = onSyncSchedule,
@@ -369,12 +377,17 @@ private fun DirectHeaterControlCard(
 private fun ScheduleConfigurationCard(
   state: HeaterUiState,
   onReadyTimeChanged: (Int, Int) -> Unit,
+  onSelectRecentTime: (Int, Int) -> Unit,
+  onCommitScheduleTime: () -> Unit,
   onToggleWeekday: (Int) -> Unit,
   onSetScheduleEnabled: (Boolean) -> Unit,
   onSyncSchedule: () -> Unit,
 ) {
   val schedule = state.scheduleConfig
   val window = state.heatingWindow
+  val stagedHour = state.stagedReadyHour
+  val stagedMinute = state.stagedReadyMinute
+  val isTimeModified = state.hasUnsavedTimeChanges
 
   Card(
     shape = RoundedCornerShape(22.dp),
@@ -404,6 +417,7 @@ private fun ScheduleConfigurationCard(
           val scheduleSubtitle =
             when {
               state.isSyncingSchedule -> "⏳ Syncing schedule to TellStick..."
+              isTimeModified -> "Pending: Ready at %02d:%02d · Tap 'Set Time'".format(stagedHour, stagedMinute)
               schedule.enabled ->
                 "${HeaterScheduleCalculator.formatCountdown(window.durationUntilStart)} · ✓ Synced"
               else -> HeaterScheduleCalculator.formatCountdown(window.durationUntilStart)
@@ -411,7 +425,7 @@ private fun ScheduleConfigurationCard(
           Text(
             text = scheduleSubtitle,
             fontSize = 13.sp,
-            color = MaterialTheme.colorScheme.primary,
+            color = if (isTimeModified) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary,
             fontWeight = FontWeight.Medium,
           )
         }
@@ -421,12 +435,70 @@ private fun ScheduleConfigurationCard(
         )
       }
 
-      // Samsung Galaxy One UI Alarm-style Wheel Picker
+      // Samsung Galaxy One UI Alarm-style Wheel Picker (controls staged time)
       SamsungWheelTimePicker(
-        hour = schedule.readyHour,
-        minute = schedule.readyMinute,
+        hour = stagedHour,
+        minute = stagedMinute,
         onTimeChanged = onReadyTimeChanged,
       )
+
+      // Recent / quick time preselections
+      if (state.recentReadyTimes.isNotEmpty()) {
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Text(
+            text = "Quick:",
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+          state.recentReadyTimes.forEach { (h, m) ->
+            val isCurrent = stagedHour == h && stagedMinute == m
+            AssistChip(
+              onClick = { onSelectRecentTime(h, m) },
+              label = {
+                Text(
+                  text = "%02d:%02d".format(h, m),
+                  fontSize = 12.sp,
+                  fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
+                )
+              },
+              colors = AssistChipDefaults.assistChipColors(
+                containerColor = if (isCurrent) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
+                labelColor = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+              ),
+              border = null,
+              shape = RoundedCornerShape(12.dp),
+            )
+          }
+        }
+      }
+
+      // "Set Time" / Commit button
+      Button(
+        onClick = onCommitScheduleTime,
+        enabled = !state.isSyncingSchedule,
+        shape = RoundedCornerShape(14.dp),
+        modifier = Modifier.fillMaxWidth().height(46.dp),
+        colors = ButtonDefaults.buttonColors(
+          containerColor = if (isTimeModified) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondaryContainer,
+          contentColor = if (isTimeModified) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSecondaryContainer,
+        ),
+      ) {
+        val btnLabel = if (isTimeModified) {
+          "Set Time (%02d:%02d)".format(stagedHour, stagedMinute)
+        } else {
+          "✓ Schedule Set (%02d:%02d)".format(schedule.readyHour, schedule.readyMinute)
+        }
+        Text(
+          text = btnLabel,
+          fontSize = 14.sp,
+          fontWeight = FontWeight.Bold,
+        )
+      }
 
       // Calculated Pre-Heat & Auto-Off Summary Timeline
       val preHeatBadge =
@@ -581,6 +653,8 @@ fun MainScreenPreview() {
       onTurnOffHeater = {},
       onRefreshStatus = {},
       onReadyTimeChanged = { _, _ -> },
+      onSelectRecentTime = { _, _ -> },
+      onCommitScheduleTime = {},
       onToggleWeekday = {},
       onSetScheduleEnabled = {},
       onSyncSchedule = {},

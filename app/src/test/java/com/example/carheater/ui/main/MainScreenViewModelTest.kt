@@ -54,11 +54,18 @@ class MainScreenViewModelTest {
   fun viewModel_updatesReadyTimeAndAutoOffOffset() = runTest {
     val viewModel = MainScreenViewModel()
     viewModel.updateReadyTime(6, 45)
+    val stagedState = viewModel.uiState.value
+    assertEquals(6, stagedState.stagedReadyHour)
+    assertEquals(45, stagedState.stagedReadyMinute)
+    assertEquals(true, stagedState.hasUnsavedTimeChanges)
+
+    viewModel.commitScheduleTime()
     viewModel.updateAutoOffOffset(15)
 
     val state = viewModel.uiState.value
     assertEquals(6, state.scheduleConfig.readyHour)
     assertEquals(45, state.scheduleConfig.readyMinute)
+    assertEquals(false, state.hasUnsavedTimeChanges)
     assertEquals(LocalTime.of(4, 45), state.heatingWindow.startTime)
     assertEquals(LocalTime.of(7, 0), state.heatingWindow.stopTime)
   }

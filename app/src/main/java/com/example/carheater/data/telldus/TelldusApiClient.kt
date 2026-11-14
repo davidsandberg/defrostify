@@ -469,6 +469,26 @@ class TelldusApiClient {
     }
 
   /**
+   * Deletes a scheduled job from the Telldus scheduler (`/scheduler/removeJob`).
+   */
+  suspend fun removeScheduleJob(auth: AuthConfig, jobId: Int): Boolean =
+    withContext(Dispatchers.IO) {
+      if (jobId <= 0) return@withContext true
+      runCatching {
+        val responseText =
+          callTelldusEndpoint(
+            auth = auth,
+            path = "scheduler/removeJob",
+            queryParams = mapOf("id" to jobId.toString()),
+          )
+        val json = JSONObject(responseText)
+        checkForApiError(json, responseText)
+        val status = json.optString("status", "")
+        status.equals("success", ignoreCase = true) || json.optInt("status", 0) == 1
+      }.getOrDefault(false)
+    }
+
+  /**
    * Automatically fetches or generates private Telldus Live Cloud OAuth 1.0a keys
    * (`Public key`, `Private key`, `Token`, `Token secret`) from `https://pa-api.telldus.com/keys/generatePrivate`
    * using the active `login.telldus.com` session cookies stored in Android's [ android.webkit.CookieManager ].

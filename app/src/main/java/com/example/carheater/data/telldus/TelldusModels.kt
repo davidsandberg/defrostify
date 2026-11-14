@@ -116,6 +116,78 @@ data class HeaterScheduleConfig(
   val activeWeekdays: Set<Int> = emptySet(), // 1=Mon..7=Sun; empty means next single occurrence
   val turnOnJobId: Int? = null,
   val turnOffJobId: Int? = null,
+) {
+  /**
+   * Serializes readyTime, preHeatMinutes, autoOffOffsetMinutes and activeWeekdays
+   * into a string format stored in Telldus job's `methodValue` (e.g. "ready:07:30,pre:120,post:30,days:1-2-3-4-5").
+   */
+  fun toMethodValueString(): String {
+    val daysStr = if (activeWeekdays.isEmpty()) "0" else activeWeekdays.sorted().joinToString("-")
+    return "ready:%02d:%02d,pre:%d,post:%d,days:%s".format(
+      readyHour,
+      readyMinute,
+      preHeatMinutes,
+      autoOffOffsetMinutes,
+      daysStr
+    )
+  }
+
+  companion object {
+    /**
+     * Parses the metadata string from `methodValue` if present.
+     */
+    fun parseFromMethodValue(methodValue: String?): ParsedScheduleMetadata? {
+      if (methodValue.isNullOrBlank()) return null
+      var readyHour: Int? = null
+      var readyMinute: Int? = null
+      var preHeat: Int? = null
+      var postHeat: Int? = null
+      var days: Set<Int>? = null
+
+      methodValue.split(",").forEach { part ->
+        val kv = part.split(":")
+        if (kv.size >= 2) {
+          when (kv[0].trim().lowercase()) {
+            "ready" -> {
+              val timeParts = kv[1].trim().split(":")
+              if (timeParts.size == 2) {
+                readyHour = timeParts[0].toIntOrNull()
+                readyMinute = timeParts[1].toIntOrNull()
+              }
+            }
+            "pre" -> preHeat = kv[1].trim().toIntOrNull()
+            "post" -> postHeat = kv[1].trim().toIntOrNull()
+            "days" -> {
+              days = kv[1].trim().split("-")
+                .mapNotNull { it.toIntOrNull() }
+                .filter { it in 1..7 }
+                .toSet()
+            }
+          }
+        }
+      }
+
+      return if (readyHour != null && readyMinute != null) {
+        ParsedScheduleMetadata(
+          readyHour = readyHour.coerceIn(0, 23),
+          readyMinute = readyMinute.coerceIn(0, 59),
+          preHeatMinutes = preHeat,
+          autoOffOffsetMinutes = postHeat,
+          activeWeekdays = days,
+        )
+      } else {
+        null
+      }
+    }
+  }
+}
+
+data class ParsedScheduleMetadata(
+  val readyHour: Int,
+  val readyMinute: Int,
+  val preHeatMinutes: Int?,
+  val autoOffOffsetMinutes: Int?,
+  val activeWeekdays: Set<Int>?,
 )
 
 data class CalculatedHeatingWindow(

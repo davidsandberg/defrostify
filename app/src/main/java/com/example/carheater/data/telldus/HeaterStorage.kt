@@ -115,4 +115,32 @@ class HeaterStorage(context: Context) {
       }
       .apply()
   }
+
+  fun loadRecentTimes(): List<Pair<Int, Int>> {
+    val raw = prefs.getString("recent_ready_times", "") ?: ""
+    if (raw.isBlank()) {
+      return listOf(Pair(7, 30), Pair(8, 0), Pair(16, 30))
+    }
+    return raw.split(";")
+      .mapNotNull { entry ->
+        val parts = entry.split(":")
+        if (parts.size == 2) {
+          val h = parts[0].toIntOrNull()
+          val m = parts[1].toIntOrNull()
+          if (h != null && m != null) Pair(h.coerceIn(0, 23), m.coerceIn(0, 59)) else null
+        } else null
+      }
+      .distinct()
+      .take(3)
+  }
+
+  fun saveRecentTime(hour: Int, minute: Int) {
+    val h = hour.coerceIn(0, 23)
+    val m = minute.coerceIn(0, 59)
+    val existing = loadRecentTimes().toMutableList()
+    existing.removeAll { it.first == h && it.second == m }
+    existing.add(0, Pair(h, m))
+    val serialized = existing.take(3).joinToString(";") { "${it.first}:${it.second}" }
+    prefs.edit().putString("recent_ready_times", serialized).apply()
+  }
 }
