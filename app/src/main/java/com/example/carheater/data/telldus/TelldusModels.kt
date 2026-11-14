@@ -116,20 +116,28 @@ data class HeaterScheduleConfig(
   val activeWeekdays: Set<Int> = emptySet(), // 1=Mon..7=Sun; empty means next single occurrence
   val turnOnJobId: Int? = null,
   val turnOffJobId: Int? = null,
+  val targetDate: String? = null, // YYYY-MM-DD for single-occurrence schedules
 ) {
   /**
-   * Serializes readyTime, preHeatMinutes, autoOffOffsetMinutes and activeWeekdays
-   * into a string format stored in Telldus job's `methodValue` (e.g. "ready:07:30,pre:120,post:30,days:1-2-3-4-5").
+   * Serializes readyTime, preHeatMinutes, autoOffOffsetMinutes, activeWeekdays, enabled state,
+   * and optional targetDate (for single runs) into a string format stored in Telldus job's `methodValue`.
    */
-  fun toMethodValueString(): String {
+  fun toMethodValueString(date: String? = targetDate): String {
     val daysStr = if (activeWeekdays.isEmpty()) "0" else activeWeekdays.sorted().joinToString("-")
-    return "ready:%02d:%02d,pre:%d,post:%d,days:%s".format(
+    val base = "ready:%02d:%02d,pre:%d,post:%d,days:%s,active:%d".format(
       readyHour,
       readyMinute,
       preHeatMinutes,
       autoOffOffsetMinutes,
-      daysStr
+      daysStr,
+      if (enabled) 1 else 0
     )
+    val effectiveDate = if (activeWeekdays.isEmpty()) date else null
+    return if (!effectiveDate.isNullOrBlank()) {
+      "$base,date:$effectiveDate"
+    } else {
+      base
+    }
   }
 
   companion object {
@@ -143,9 +151,11 @@ data class HeaterScheduleConfig(
       var preHeat: Int? = null
       var postHeat: Int? = null
       var days: Set<Int>? = null
+      var active: Boolean? = null
+      var targetDate: String? = null
 
       methodValue.split(",").forEach { part ->
-        val kv = part.split(":")
+        val kv = part.split(":", limit = 2)
         if (kv.size >= 2) {
           when (kv[0].trim().lowercase()) {
             "ready" -> {
@@ -163,6 +173,8 @@ data class HeaterScheduleConfig(
                 .filter { it in 1..7 }
                 .toSet()
             }
+            "active" -> active = kv[1].trim() == "1"
+            "date" -> targetDate = kv[1].trim()
           }
         }
       }
@@ -174,6 +186,8 @@ data class HeaterScheduleConfig(
           preHeatMinutes = preHeat,
           autoOffOffsetMinutes = postHeat,
           activeWeekdays = days,
+          active = active,
+          targetDate = targetDate,
         )
       } else {
         null
@@ -188,6 +202,8 @@ data class ParsedScheduleMetadata(
   val preHeatMinutes: Int?,
   val autoOffOffsetMinutes: Int?,
   val activeWeekdays: Set<Int>?,
+  val active: Boolean? = null,
+  val targetDate: String? = null,
 )
 
 data class CalculatedHeatingWindow(

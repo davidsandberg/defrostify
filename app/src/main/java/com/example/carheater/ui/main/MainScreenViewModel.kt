@@ -303,16 +303,19 @@ class MainScreenViewModel(
       if (auth.hasCloudCredentials) {
         syncScheduleFromTelldus(silent = true)
       }
+      checkAndDisarmOneShotSchedule()
       // Follow-up refresh after 2.5s to ensure Wi-Fi re-association after screen unlock has completed
       viewModelScope.launch {
         delay(2500L)
         refreshSwitchState(silent = true)
+        checkAndDisarmOneShotSchedule()
       }
     } else {
       // Refresh countdown calculation
       _uiState.update {
         it.copy(heatingWindow = HeaterScheduleCalculator.calculate(it.scheduleConfig))
       }
+      checkAndDisarmOneShotSchedule()
     }
     startStatusPolling()
   }
@@ -320,6 +323,21 @@ class MainScreenViewModel(
   fun onAppPaused() {
     statusPollJob?.cancel()
     statusPollJob = null
+  }
+
+  private fun checkAndDisarmOneShotSchedule() {
+    val sched = _uiState.value.scheduleConfig
+    if (sched.enabled && sched.activeWeekdays.isEmpty()) {
+      val targetDate = sched.targetDate
+      val runDate = targetDate?.let { runCatching { java.time.LocalDate.parse(it) }.getOrNull() }
+      if (runDate != null) {
+        val stopDateTime = runDate.atTime(java.time.LocalTime.of(sched.readyHour, sched.readyMinute))
+          .plusMinutes(sched.autoOffOffsetMinutes.toLong())
+        if (java.time.LocalDateTime.now().isAfter(stopDateTime)) {
+          setScheduleEnabled(false)
+        }
+      }
+    }
   }
 
   private fun startStatusPolling() {
@@ -331,6 +349,7 @@ class MainScreenViewModel(
           // When remote (Cloud), poll every 60s (~1 minute) while app is active.
           val intervalMs = if (TelldusApiClient.isLocalReachable()) 15_000L else 60_000L
           delay(intervalMs)
+          checkAndDisarmOneShotSchedule()
           val current = _uiState.value
           val auth = current.authConfig
           val deviceId = auth.selectedDeviceId
@@ -349,6 +368,7 @@ class MainScreenViewModel(
     viewModelScope.launch {
       _uiState.update { it.copy(isRefreshing = true, errorMessage = null) }
       try {
+        checkAndDisarmOneShotSchedule()
         refreshSwitchState(silent = false)
         val auth = _uiState.value.authConfig
         if (auth.hasCloudCredentials) {
@@ -575,16 +595,23 @@ class MainScreenViewModel(
     val m = current.stagedReadyMinute
     storage?.saveRecentTime(h, m)
     val updatedRecent = storage?.loadRecentTimes() ?: current.recentReadyTimes
-    val updatedConfig = current.scheduleConfig.copy(
+    val tempConfig = current.scheduleConfig.copy(
       readyHour = h,
       readyMinute = m,
       enabled = true,
     )
+    val window = HeaterScheduleCalculator.calculate(tempConfig)
+    val targetDate = if (tempConfig.activeWeekdays.isEmpty()) {
+      window.nextReadyDateTime.toLocalDate().toString()
+    } else {
+      null
+    }
+    val updatedConfig = tempConfig.copy(targetDate = targetDate)
     storage?.saveScheduleConfig(updatedConfig)
     _uiState.update {
       it.copy(
         scheduleConfig = updatedConfig,
-        heatingWindow = HeaterScheduleCalculator.calculate(updatedConfig),
+        heatingWindow = window,
         recentReadyTimes = updatedRecent,
       )
     }
@@ -625,7 +652,13 @@ class MainScreenViewModel(
     if (day !in 1..7) return
     val current = _uiState.value.scheduleConfig.activeWeekdays
     val updatedDays = if (current.contains(day)) current - day else current + day
-    val updated = _uiState.value.scheduleConfig.copy(activeWeekdays = updatedDays)
+    val targetDate = if (updatedDays.isEmpty() && _uiState.value.scheduleConfig.enabled) {
+      val temp = _uiState.value.scheduleConfig.copy(activeWeekdays = updatedDays)
+      HeaterScheduleCalculator.calculate(temp).nextReadyDateTime.toLocalDate().toString()
+    } else {
+      null
+    }
+    val updated = _uiState.value.scheduleConfig.copy(activeWeekdays = updatedDays, targetDate = targetDate)
     storage?.saveScheduleConfig(updated)
     _uiState.update {
       it.copy(
@@ -640,7 +673,14 @@ class MainScreenViewModel(
 
   fun setScheduleEnabled(enabled: Boolean) {
     autoSyncJob?.cancel()
-    val updated = _uiState.value.scheduleConfig.copy(enabled = enabled)
+    val current = _uiState.value.scheduleConfig
+    val targetDate = if (enabled && current.activeWeekdays.isEmpty()) {
+      val tempWindow = HeaterScheduleCalculator.calculate(current.copy(enabled = true))
+      tempWindow.nextReadyDateTime.toLocalDate().toString()
+    } else {
+      current.targetDate
+    }
+    val updated = current.copy(enabled = enabled, targetDate = targetDate)
     storage?.saveScheduleConfig(updated)
     _uiState.update {
       it.copy(
@@ -679,9 +719,23 @@ class MainScreenViewModel(
             onJob.weekdays.split(",").mapNotNull { it.trim().toIntOrNull() }.filter { it in 1..7 }.toSet()
           }
 
+          var isEnabled = onJob.active
+          val targetDate = parsedMeta?.targetDate
+
+          // Auto-disarm single-occurrence schedule if its stop time has passed
+          if (isEnabled && activeDays.isEmpty() && !targetDate.isNullOrBlank()) {
+            val runDate = runCatching { java.time.LocalDate.parse(targetDate) }.getOrNull()
+            if (runDate != null) {
+              val stopDateTime = runDate.atTime(readyTime).plusMinutes(postHeat.toLong())
+              if (java.time.LocalDateTime.now().isAfter(stopDateTime)) {
+                isEnabled = false
+              }
+            }
+          }
+
           val syncedConfig =
             current.copy(
-              enabled = onJob.active,
+              enabled = isEnabled,
               readyHour = readyTime.hour,
               readyMinute = readyTime.minute,
               preHeatMinutes = preHeat,
@@ -689,6 +743,7 @@ class MainScreenViewModel(
               activeWeekdays = activeDays,
               turnOnJobId = onJob.id,
               turnOffJobId = offJob?.id ?: current.turnOffJobId,
+              targetDate = targetDate,
             )
           storage?.saveScheduleConfig(syncedConfig)
           _uiState.update {
@@ -698,6 +753,11 @@ class MainScreenViewModel(
               stagedReadyHour = readyTime.hour,
               stagedReadyMinute = readyTime.minute,
             )
+          }
+
+          // If a single-run schedule just completed and was auto-disarmed, deactivate on Telldus
+          if (onJob.active && !isEnabled) {
+            syncScheduleToTelldus(syncedConfig)
           }
         }
       }
@@ -777,7 +837,12 @@ class MainScreenViewModel(
 
         val targetOnId = config.turnOnJobId ?: existingOnJob?.id ?: 0
         val targetOffId = config.turnOffJobId ?: existingOffJob?.id ?: 0
-        val methodValueMetadata = config.toMethodValueString()
+        val targetDate = if (config.activeWeekdays.isEmpty()) {
+          config.targetDate ?: window.nextReadyDateTime.toLocalDate().toString()
+        } else {
+          null
+        }
+        val methodValueMetadata = config.toMethodValueString(targetDate)
 
         val onJob =
           TelldusScheduleJob(
@@ -792,7 +857,7 @@ class MainScreenViewModel(
           )
         val savedOnId = apiClient.setScheduleJob(auth, onJob)
         if (savedOnId > 0) {
-          val partial = config.copy(turnOnJobId = savedOnId)
+          val partial = config.copy(turnOnJobId = savedOnId, targetDate = targetDate)
           storage?.saveScheduleConfig(partial)
           _uiState.update { it.copy(scheduleConfig = partial) }
         }
@@ -813,10 +878,16 @@ class MainScreenViewModel(
       }
         .onSuccess { (savedOnId, savedOffId) ->
           startStatusPolling()
+          val targetDate = if (config.activeWeekdays.isEmpty()) {
+            config.targetDate ?: window.nextReadyDateTime.toLocalDate().toString()
+          } else {
+            null
+          }
           val updatedSchedule =
             config.copy(
               turnOnJobId = savedOnId.takeIf { it > 0 } ?: config.turnOnJobId,
               turnOffJobId = savedOffId.takeIf { it > 0 } ?: config.turnOffJobId,
+              targetDate = targetDate,
             )
           storage?.saveScheduleConfig(updatedSchedule)
           _uiState.update {

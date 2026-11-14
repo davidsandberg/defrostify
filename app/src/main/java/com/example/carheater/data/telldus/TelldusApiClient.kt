@@ -440,7 +440,7 @@ class TelldusApiClient {
       val targetDeviceId = toCloudDeviceId(job.deviceId)
       val jobKey = "$targetDeviceId:${job.method}"
       val jobSignature =
-        "${job.id}:$targetDeviceId:${job.method}:${job.hour}:${job.minute}:${job.weekdays}:${job.active}"
+        "${job.id}:$targetDeviceId:${job.method}:${job.hour}:${job.minute}:${job.weekdays}:${job.active}:${job.methodValue}"
       if (job.id > 0 && lastSyncedJobSignatureCache[jobKey] == jobSignature) {
         return@withContext job.id
       }

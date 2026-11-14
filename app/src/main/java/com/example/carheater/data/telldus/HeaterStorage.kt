@@ -80,6 +80,8 @@ class HeaterStorage(context: Context) {
         null
       }
 
+    val targetDate = prefs.getString("target_date", null)
+
     return HeaterScheduleConfig(
       enabled = prefs.getBoolean("schedule_enabled", false),
       readyHour = prefs.getInt("ready_hour", 7).coerceIn(0, 23),
@@ -89,6 +91,7 @@ class HeaterStorage(context: Context) {
       activeWeekdays = weekdays,
       turnOnJobId = turnOnJobId,
       turnOffJobId = turnOffJobId,
+      targetDate = targetDate,
     )
   }
 
@@ -102,6 +105,11 @@ class HeaterStorage(context: Context) {
       .putInt("auto_off_offset_minutes", config.autoOffOffsetMinutes)
       .putString("active_weekdays", config.activeWeekdays.sorted().joinToString(","))
       .apply {
+        if (config.targetDate != null) {
+          putString("target_date", config.targetDate)
+        } else {
+          remove("target_date")
+        }
         if (config.turnOnJobId != null) {
           putInt("turn_on_job_id", config.turnOnJobId)
         } else {

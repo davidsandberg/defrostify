@@ -69,4 +69,44 @@ class MainScreenViewModelTest {
     assertEquals(LocalTime.of(4, 45), state.heatingWindow.startTime)
     assertEquals(LocalTime.of(7, 0), state.heatingWindow.stopTime)
   }
+
+  @Test
+  fun scheduleConfig_metadataSerializationAndParsing() {
+    val singleRunConfig = HeaterScheduleConfig(
+      enabled = true,
+      readyHour = 8,
+      readyMinute = 15,
+      preHeatMinutes = 90,
+      autoOffOffsetMinutes = 20,
+      activeWeekdays = emptySet(),
+      targetDate = "2026-11-15",
+    )
+    val serialized = singleRunConfig.toMethodValueString()
+    assertEquals("ready:08:15,pre:90,post:20,days:0,active:1,date:2026-11-15", serialized)
+
+    val parsed = HeaterScheduleConfig.parseFromMethodValue(serialized)
+    assertEquals(8, parsed?.readyHour)
+    assertEquals(15, parsed?.readyMinute)
+    assertEquals(90, parsed?.preHeatMinutes)
+    assertEquals(20, parsed?.autoOffOffsetMinutes)
+    assertEquals(emptySet<Int>(), parsed?.activeWeekdays)
+    assertEquals(true, parsed?.active)
+    assertEquals("2026-11-15", parsed?.targetDate)
+
+    val repeatingConfig = HeaterScheduleConfig(
+      enabled = false,
+      readyHour = 7,
+      readyMinute = 0,
+      preHeatMinutes = 120,
+      autoOffOffsetMinutes = 30,
+      activeWeekdays = setOf(1, 2, 3),
+    )
+    val repeatingSerialized = repeatingConfig.toMethodValueString()
+    assertEquals("ready:07:00,pre:120,post:30,days:1-2-3,active:0", repeatingSerialized)
+
+    val parsedRepeating = HeaterScheduleConfig.parseFromMethodValue(repeatingSerialized)
+    assertEquals(false, parsedRepeating?.active)
+    assertEquals(setOf(1, 2, 3), parsedRepeating?.activeWeekdays)
+    assertEquals(null, parsedRepeating?.targetDate)
+  }
 }
