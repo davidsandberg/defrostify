@@ -368,8 +368,9 @@ class MainScreenViewModel(
     viewModelScope.launch {
       _uiState.update { it.copy(isRefreshing = true, errorMessage = null) }
       try {
+        TelldusApiClient.markLocalSucceeded()
         checkAndDisarmOneShotSchedule()
-        refreshSwitchState(silent = false)
+        performRefreshSwitchState(silent = false)
         val auth = _uiState.value.authConfig
         if (auth.hasCloudCredentials) {
           syncScheduleFromTelldus(silent = true)
@@ -405,7 +406,7 @@ class MainScreenViewModel(
             }
           val initialWatts =
             selectedDevice?.let { dev ->
-              apiClient.getDevicePowerWatts(updatedAuth, dev.id, dev.name)
+              if (dev.isOn) apiClient.getDevicePowerWatts(updatedAuth, dev.id, dev.name) else 0.0
             }
           _uiState.update {
             it.copy(
@@ -470,47 +471,52 @@ class MainScreenViewModel(
   }
 
   fun refreshSwitchState(silent: Boolean = false) {
+    viewModelScope.launch {
+      performRefreshSwitchState(silent = silent)
+    }
+  }
+
+  private suspend fun performRefreshSwitchState(silent: Boolean = false) {
     val auth = _uiState.value.authConfig
     val deviceId = auth.selectedDeviceId ?: return
     if (!auth.isAuthenticated) return
 
-    viewModelScope.launch {
-      if (!silent) {
-        _uiState.update { it.copy(isBusy = true, errorMessage = null) }
-      }
-      runCatching {
-        val device = apiClient.getDeviceInfo(auth, deviceId)
-        // Only fetch wattage sensor if local is reachable or explicitly requested (not silent)
-        val watts =
-          if (TelldusApiClient.isLocalReachable() || !silent) {
-            apiClient.getDevicePowerWatts(auth, deviceId, device.name)
-          } else {
-            _uiState.value.powerWatts
-          }
-        device to watts
-      }
-        .onSuccess { (device, watts) ->
-          _uiState.update {
-            it.copy(
-              isBusy = false,
-              isHeaterOn = device.isOn,
-              powerWatts = watts ?: it.powerWatts,
-              heatingWindow = HeaterScheduleCalculator.calculate(it.scheduleConfig),
-              statusMessage =
-                if (silent) it.statusMessage
-                else "Switch '${device.name}' is currently ${if (device.isOn) "ON" else "OFF"}.",
-            )
-          }
-        }
-        .onFailure { err ->
-          _uiState.update {
-            it.copy(
-              isBusy = false,
-              errorMessage = if (silent) it.errorMessage else (err.message ?: "Failed to query switch status."),
-            )
-          }
-        }
+    if (!silent) {
+      _uiState.update { it.copy(isBusy = true, errorMessage = null) }
     }
+    runCatching {
+      val device = apiClient.getDeviceInfo(auth, deviceId)
+      val watts =
+        if (!device.isOn) {
+          0.0
+        } else if (TelldusApiClient.isLocalReachable() || !silent) {
+          apiClient.getDevicePowerWatts(auth, deviceId, device.name)
+        } else {
+          _uiState.value.powerWatts
+        }
+      device to watts
+    }
+      .onSuccess { (device, watts) ->
+        _uiState.update {
+          it.copy(
+            isBusy = false,
+            isHeaterOn = device.isOn,
+            powerWatts = if (!device.isOn) 0.0 else (watts ?: it.powerWatts),
+            heatingWindow = HeaterScheduleCalculator.calculate(it.scheduleConfig),
+            statusMessage =
+              if (silent) it.statusMessage
+              else "Switch '${device.name}' is currently ${if (device.isOn) "ON" else "OFF"}.",
+          )
+        }
+      }
+      .onFailure { err ->
+        _uiState.update {
+          it.copy(
+            isBusy = false,
+            errorMessage = if (silent) it.errorMessage else (err.message ?: "Failed to query switch status."),
+          )
+        }
+      }
   }
 
   fun setHeaterPower(turnOn: Boolean) {

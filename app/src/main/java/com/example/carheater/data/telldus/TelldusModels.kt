@@ -104,7 +104,9 @@ data class TelldusScheduleJob(
   val type: String = "time",
   val weekdays: String, // e.g. "1,2,3,4,5,6,7" where 1=Mon..7=Sun
   val active: Boolean = true,
-  val reps: Int = 1,
+  val reps: Int = 2,
+  val retries: Int = 5,
+  val retryInterval: Int = 1,
 )
 
 data class HeaterScheduleConfig(

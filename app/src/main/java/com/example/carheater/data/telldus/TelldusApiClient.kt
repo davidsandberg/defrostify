@@ -423,7 +423,9 @@ class TelldusApiClient {
             type = obj.optString("type", "time"),
             weekdays = obj.optString("weekdays", "1,2,3,4,5,6,7"),
             active = obj.optInt("active", 1) == 1,
-            reps = obj.optInt("reps", 1),
+            reps = obj.optInt("reps", 2),
+            retries = obj.optInt("retries", 5),
+            retryInterval = obj.optInt("retryInterval", 1),
           )
         )
       }
@@ -457,6 +459,8 @@ class TelldusApiClient {
           "weekdays" to job.weekdays,
           "active" to if (job.active) "1" else "0",
           "reps" to job.reps.toString(),
+          "retries" to job.retries.toString(),
+          "retryInterval" to job.retryInterval.toString(),
         )
       val responseText =
         callTelldusEndpoint(
@@ -469,7 +473,7 @@ class TelldusApiClient {
       val savedId = json.optInt("id", job.id)
       if (savedId > 0) {
         lastSyncedJobSignatureCache[jobKey] =
-          "$savedId:$targetDeviceId:${job.method}:${job.hour}:${job.minute}:${job.weekdays}:${job.active}"
+          "$savedId:$targetDeviceId:${job.method}:${job.hour}:${job.minute}:${job.weekdays}:${job.active}:${job.methodValue}"
       }
       savedId
     }
