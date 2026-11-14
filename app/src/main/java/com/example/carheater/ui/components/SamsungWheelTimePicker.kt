@@ -55,45 +55,45 @@ fun SamsungWheelTimePicker(
   minute: Int,
   onTimeChanged: (newHour: Int, newMinute: Int) -> Unit,
   modifier: Modifier = Modifier,
-  itemHeight: Dp = 50.dp,
+  itemHeight: Dp = 42.dp,
 ) {
   Column(
     modifier =
       modifier
         .fillMaxWidth()
-        .clip(RoundedCornerShape(24.dp))
+        .clip(RoundedCornerShape(20.dp))
         .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-        .padding(vertical = 10.dp, horizontal = 16.dp),
+        .padding(vertical = 8.dp, horizontal = 14.dp),
     horizontalAlignment = Alignment.CenterHorizontally,
   ) {
     // Column headers aligned identically to the wheels below
     Row(
-      modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
+      modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp),
       horizontalArrangement = Arrangement.Center,
       verticalAlignment = Alignment.CenterVertically,
     ) {
       Text(
         text = "HOUR",
-        fontSize = 11.sp,
+        fontSize = 10.sp,
         fontWeight = FontWeight.SemiBold,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         letterSpacing = 1.2.sp,
         textAlign = TextAlign.Center,
-        modifier = Modifier.width(110.dp),
+        modifier = Modifier.width(105.dp),
       )
       Text(
         text = " ",
-        fontSize = 14.sp,
+        fontSize = 12.sp,
         modifier = Modifier.padding(horizontal = 10.dp),
       )
       Text(
         text = "MINUTE",
-        fontSize = 11.sp,
+        fontSize = 10.sp,
         fontWeight = FontWeight.SemiBold,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         letterSpacing = 1.2.sp,
         textAlign = TextAlign.Center,
-        modifier = Modifier.width(110.dp),
+        modifier = Modifier.width(105.dp),
       )
     }
 
@@ -106,7 +106,7 @@ fun SamsungWheelTimePicker(
           Modifier
             .fillMaxWidth(0.86f)
             .height(itemHeight)
-            .clip(RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(14.dp))
             .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
       )
       Column(
@@ -114,12 +114,12 @@ fun SamsungWheelTimePicker(
         verticalArrangement = Arrangement.SpaceBetween,
       ) {
         HorizontalDivider(
-          thickness = 1.5.dp,
-          color = MaterialTheme.colorScheme.primary.copy(alpha = 0.35f),
+          thickness = 1.dp,
+          color = MaterialTheme.colorScheme.primary.copy(alpha = 0.30f),
         )
         HorizontalDivider(
-          thickness = 1.5.dp,
-          color = MaterialTheme.colorScheme.primary.copy(alpha = 0.35f),
+          thickness = 1.dp,
+          color = MaterialTheme.colorScheme.primary.copy(alpha = 0.30f),
         )
       }
 
@@ -141,14 +141,14 @@ fun SamsungWheelTimePicker(
               currentOnTimeChanged(newHour, currentMinute)
             }
           },
-          modifier = Modifier.width(110.dp),
+          modifier = Modifier.width(105.dp),
         )
 
         Text(
           text = ":",
-          fontSize = 34.sp,
-          fontWeight = FontWeight.Bold,
-          color = MaterialTheme.colorScheme.primary,
+          fontSize = 28.sp,
+          fontWeight = FontWeight.SemiBold,
+          color = MaterialTheme.colorScheme.onSurface,
           modifier = Modifier.padding(horizontal = 10.dp),
         )
 
@@ -161,7 +161,7 @@ fun SamsungWheelTimePicker(
               currentOnTimeChanged(currentHour, newMinute)
             }
           },
-          modifier = Modifier.width(110.dp),
+          modifier = Modifier.width(105.dp),
         )
       }
     }
@@ -239,16 +239,6 @@ private fun CircularNumberWheel(
   ) {
     items(count = VIRTUAL_ITEM_COUNT, key = { it }) { index ->
       val itemValue = ((index % rangeSize) + rangeSize) % rangeSize
-      val distanceFromCenter = abs(index - centerIndex)
-      val isCenter = distanceFromCenter == 0
-
-      val scale = if (isCenter) 1.0f else 0.74f
-      val alpha =
-        when (distanceFromCenter) {
-          0 -> 1.0f
-          1 -> 0.42f
-          else -> 0.15f
-        }
 
       Box(
         modifier =
@@ -259,29 +249,33 @@ private fun CircularNumberWheel(
               interactionSource = remember { MutableInteractionSource() },
               indication = null,
             ) {
-              if (!isCenter) {
+              if (index != centerIndex) {
                 coroutineScope.launch {
                   listState.animateScrollToItem((index - 1).coerceAtLeast(0))
                 }
               }
             }
             .graphicsLayer {
-              scaleX = scale
-              scaleY = scale
-            }
-            .alpha(alpha),
+              val layoutInfo = listState.layoutInfo
+              val itemInfo = layoutInfo.visibleItemsInfo.firstOrNull { it.index == index }
+              if (itemInfo != null) {
+                val viewportCenter =
+                  (layoutInfo.viewportStartOffset + layoutInfo.viewportEndOffset) / 2f
+                val itemCenter = itemInfo.offset + itemInfo.size / 2f
+                val normalizedDistance =
+                  (abs(itemCenter - viewportCenter) / itemHeightPx).coerceIn(0f, 1.5f)
+                alpha = (1f - (normalizedDistance * 0.62f)).coerceIn(0.22f, 1f)
+              } else {
+                alpha = 0.22f
+              }
+            },
         contentAlignment = Alignment.Center,
       ) {
         Text(
           text = "%02d".format(itemValue),
-          fontSize = if (isCenter) 36.sp else 24.sp,
-          fontWeight = if (isCenter) FontWeight.Bold else FontWeight.Medium,
-          color =
-            if (isCenter) {
-              MaterialTheme.colorScheme.primary
-            } else {
-              MaterialTheme.colorScheme.onSurface
-            },
+          fontSize = 28.sp,
+          fontWeight = FontWeight.SemiBold,
+          color = MaterialTheme.colorScheme.onSurface,
           textAlign = TextAlign.Center,
         )
       }

@@ -315,7 +315,7 @@ object HeaterScheduleCalculator {
 
   fun formatCountdown(duration: Duration): String {
     if (duration.isNegative || duration.isZero) {
-      return "Heater start time reached (active heating window)"
+      return "Active heating window"
     }
     val totalMinutes = duration.toMinutes()
     val days = totalMinutes / (24 * 60)

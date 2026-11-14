@@ -150,12 +150,12 @@ internal fun MainScreenContent(
         Modifier
           .fillMaxSize()
           .verticalScroll(rememberScrollState()),
-      verticalArrangement = Arrangement.spacedBy(10.dp),
+      verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
     // Top Header Bar
     Column(
       modifier = Modifier.fillMaxWidth(),
-      verticalArrangement = Arrangement.spacedBy(4.dp),
+      verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
       Row(
         modifier = Modifier.fillMaxWidth(),
@@ -164,17 +164,18 @@ internal fun MainScreenContent(
       ) {
         Text(
           text = "Defrostify",
-          fontSize = 22.sp,
+          fontSize = 20.sp,
           fontWeight = FontWeight.Bold,
         )
 
         OutlinedButton(
           onClick = onOpenAuthDialog,
-          contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+          contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+          modifier = Modifier.height(32.dp),
         ) {
           Text(
             text = "⚙ Config",
-            fontSize = 13.sp,
+            fontSize = 12.sp,
             fontWeight = FontWeight.SemiBold,
             maxLines = 1,
           )
@@ -326,7 +327,7 @@ private fun DirectHeaterControlCard(
   onTurnOff: () -> Unit,
 ) {
   Card(
-    shape = RoundedCornerShape(22.dp),
+    shape = RoundedCornerShape(18.dp),
     colors =
       CardDefaults.cardColors(
         containerColor =
@@ -339,12 +340,12 @@ private fun DirectHeaterControlCard(
     modifier = Modifier.fillMaxWidth(),
   ) {
     Column(
-      modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
-      verticalArrangement = Arrangement.spacedBy(10.dp),
+      modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+      verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
       Text(
         text = "Direct Control",
-        fontSize = 17.sp,
+        fontSize = 15.sp,
         fontWeight = FontWeight.Bold,
       )
 
@@ -355,9 +356,9 @@ private fun DirectHeaterControlCard(
         Button(
           onClick = onTurnOn,
           enabled = !isBusy,
-          shape = RoundedCornerShape(14.dp),
+          shape = RoundedCornerShape(12.dp),
           contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
-          modifier = Modifier.weight(1f).height(46.dp),
+          modifier = Modifier.weight(1f).height(40.dp),
         ) {
           Text(
             text = "● ON",
@@ -370,13 +371,13 @@ private fun DirectHeaterControlCard(
         OutlinedButton(
           onClick = onTurnOff,
           enabled = !isBusy,
-          shape = RoundedCornerShape(14.dp),
+          shape = RoundedCornerShape(12.dp),
           contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
           colors =
             ButtonDefaults.outlinedButtonColors(
               contentColor = MaterialTheme.colorScheme.error
             ),
-          modifier = Modifier.weight(1f).height(46.dp),
+          modifier = Modifier.weight(1f).height(40.dp),
         ) {
           Text(
             text = "○ OFF",
@@ -407,14 +408,14 @@ private fun ScheduleConfigurationCard(
   val isTimeModified = state.hasUnsavedTimeChanges
 
   Card(
-    shape = RoundedCornerShape(22.dp),
+    shape = RoundedCornerShape(18.dp),
     colors =
       CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
     modifier = Modifier.fillMaxWidth(),
   ) {
     Column(
-      modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
-      verticalArrangement = Arrangement.spacedBy(12.dp),
+      modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+      verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
       // Title + Master Schedule Switch
       Row(
@@ -424,11 +425,11 @@ private fun ScheduleConfigurationCard(
       ) {
         Column(
           modifier = Modifier.weight(1f),
-          verticalArrangement = Arrangement.spacedBy(2.dp),
+          verticalArrangement = Arrangement.spacedBy(1.dp),
         ) {
           Text(
             text = "Schedule",
-            fontSize = 17.sp,
+            fontSize = 15.sp,
             fontWeight = FontWeight.Bold,
           )
           val scheduleSubtitle =
@@ -441,7 +442,7 @@ private fun ScheduleConfigurationCard(
             }
           Text(
             text = scheduleSubtitle,
-            fontSize = 13.sp,
+            fontSize = 12.sp,
             color =
               when {
                 isTimeModified -> MaterialTheme.colorScheme.tertiary
@@ -449,6 +450,8 @@ private fun ScheduleConfigurationCard(
                 else -> MaterialTheme.colorScheme.onSurfaceVariant
               },
             fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
           )
         }
         Switch(
@@ -479,22 +482,27 @@ private fun ScheduleConfigurationCard(
           )
           state.recentReadyTimes.forEach { (h, m) ->
             val isCurrent = stagedHour == h && stagedMinute == m
-            AssistChip(
-              onClick = { onSelectRecentTime(h, m) },
-              label = {
-                Text(
-                  text = "%02d:%02d".format(h, m),
-                  fontSize = 12.sp,
-                  fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
-                )
-              },
-              colors = AssistChipDefaults.assistChipColors(
-                containerColor = if (isCurrent) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
-                labelColor = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-              ),
-              border = null,
-              shape = RoundedCornerShape(12.dp),
-            )
+            Box(
+              modifier =
+                Modifier
+                  .clip(RoundedCornerShape(10.dp))
+                  .background(
+                    if (isCurrent) MaterialTheme.colorScheme.primaryContainer
+                    else MaterialTheme.colorScheme.surfaceContainerHigh
+                  )
+                  .clickable { onSelectRecentTime(h, m) }
+                  .padding(horizontal = 12.dp, vertical = 5.dp),
+              contentAlignment = Alignment.Center,
+            ) {
+              Text(
+                text = "%02d:%02d".format(h, m),
+                fontSize = 12.sp,
+                fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
+                color =
+                  if (isCurrent) MaterialTheme.colorScheme.primary
+                  else MaterialTheme.colorScheme.onSurface,
+              )
+            }
           }
         }
       }
@@ -503,8 +511,9 @@ private fun ScheduleConfigurationCard(
       Button(
         onClick = onCommitScheduleTime,
         enabled = isTimeModified && !state.isSyncingSchedule,
-        shape = RoundedCornerShape(14.dp),
-        modifier = Modifier.fillMaxWidth().height(46.dp),
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.fillMaxWidth().height(40.dp),
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
         colors = ButtonDefaults.buttonColors(
           containerColor = MaterialTheme.colorScheme.primary,
           contentColor = MaterialTheme.colorScheme.onPrimary,
@@ -521,7 +530,7 @@ private fun ScheduleConfigurationCard(
         }
         Text(
           text = btnLabel,
-          fontSize = 14.sp,
+          fontSize = 13.sp,
           fontWeight = FontWeight.Bold,
         )
       }
@@ -537,9 +546,9 @@ private fun ScheduleConfigurationCard(
         modifier =
           Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(14.dp))
             .background(MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.65f))
-            .padding(vertical = 10.dp, horizontal = 12.dp),
+            .padding(vertical = 7.dp, horizontal = 12.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
       ) {
@@ -550,7 +559,7 @@ private fun ScheduleConfigurationCard(
         )
         Text(
           text = "→",
-          fontSize = 16.sp,
+          fontSize = 15.sp,
           fontWeight = FontWeight.Bold,
           color = MaterialTheme.colorScheme.onSecondaryContainer,
         )
@@ -561,7 +570,7 @@ private fun ScheduleConfigurationCard(
         )
         Text(
           text = "→",
-          fontSize = 16.sp,
+          fontSize = 15.sp,
           fontWeight = FontWeight.Bold,
           color = MaterialTheme.colorScheme.onSecondaryContainer,
         )
@@ -573,7 +582,7 @@ private fun ScheduleConfigurationCard(
       }
 
       // Samsung Alarm-style Day-of-Week Selector
-      Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+      Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
         val daySummary =
           if (schedule.activeWeekdays.isEmpty()) {
             "Next occurrence (${window.nextReadyDateTime.dayOfWeek.name.lowercase().replaceFirstChar { it.uppercase() }})"
@@ -582,7 +591,7 @@ private fun ScheduleConfigurationCard(
           }
         Text(
           text = daySummary,
-          fontSize = 13.sp,
+          fontSize = 12.sp,
           fontWeight = FontWeight.Medium,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -607,7 +616,7 @@ private fun ScheduleConfigurationCard(
             Box(
               modifier =
                 Modifier
-                  .size(36.dp)
+                  .size(34.dp)
                   .clip(CircleShape)
                   .background(
                     if (selected) MaterialTheme.colorScheme.primary
@@ -623,7 +632,7 @@ private fun ScheduleConfigurationCard(
             ) {
               Text(
                 text = letter,
-                fontSize = 13.sp,
+                fontSize = 12.sp,
                 fontWeight = FontWeight.Bold,
                 color =
                   when {
@@ -648,18 +657,18 @@ private fun TimelineMetric(
 ) {
   Column(
     horizontalAlignment = Alignment.CenterHorizontally,
-    verticalArrangement = Arrangement.spacedBy(2.dp),
+    verticalArrangement = Arrangement.spacedBy(1.dp),
   ) {
     Text(
       text = label,
-      fontSize = 11.sp,
+      fontSize = 10.sp,
       fontWeight = FontWeight.SemiBold,
       color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.85f),
       textAlign = TextAlign.Center,
     )
     Text(
       text = timeText,
-      fontSize = 16.sp,
+      fontSize = 15.sp,
       fontWeight = FontWeight.ExtraBold,
       color =
         if (highlight) MaterialTheme.colorScheme.primary
