@@ -494,15 +494,17 @@ private fun ScheduleConfigurationCard(
         }
       }
 
-      // "Set Time" / Commit button
+      // "Set Time" / Commit button (disabled & greyed out when time hasn't been changed)
       Button(
         onClick = onCommitScheduleTime,
-        enabled = !state.isSyncingSchedule,
+        enabled = isTimeModified && !state.isSyncingSchedule,
         shape = RoundedCornerShape(14.dp),
         modifier = Modifier.fillMaxWidth().height(46.dp),
         colors = ButtonDefaults.buttonColors(
-          containerColor = if (isTimeModified) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondaryContainer,
-          contentColor = if (isTimeModified) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSecondaryContainer,
+          containerColor = MaterialTheme.colorScheme.primary,
+          contentColor = MaterialTheme.colorScheme.onPrimary,
+          disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+          disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
         ),
       ) {
         val btnLabel = if (isTimeModified) {

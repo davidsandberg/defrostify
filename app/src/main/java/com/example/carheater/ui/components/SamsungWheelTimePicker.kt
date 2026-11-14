@@ -199,28 +199,34 @@ private fun CircularNumberWheel(
 
   var lastHapticValue by remember { mutableIntStateOf(value) }
   val currentOnValueChange by rememberUpdatedState(onValueChange)
+  var isProgrammaticScroll by remember { androidx.compose.runtime.mutableStateOf(false) }
 
   LaunchedEffect(listState) {
     snapshotFlow { centerIndex }
       .distinctUntilChanged()
       .collect { idx ->
-        val selectedVal = ((idx % rangeSize) + rangeSize) % rangeSize
-        if (selectedVal != lastHapticValue) {
-          lastHapticValue = selectedVal
-          haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-          currentOnValueChange(selectedVal)
+        if (!isProgrammaticScroll && listState.isScrollInProgress) {
+          val selectedVal = ((idx % rangeSize) + rangeSize) % rangeSize
+          if (selectedVal != lastHapticValue) {
+            lastHapticValue = selectedVal
+            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            currentOnValueChange(selectedVal)
+          }
         }
       }
   }
 
-  LaunchedEffect(value, listState.isScrollInProgress) {
-    if (!listState.isScrollInProgress) {
-      val currentSelected = ((centerIndex % rangeSize) + rangeSize) % rangeSize
-      if (currentSelected != value) {
+  LaunchedEffect(value) {
+    val currentSelected = ((centerIndex % rangeSize) + rangeSize) % rangeSize
+    if (currentSelected != value && !listState.isScrollInProgress) {
+      isProgrammaticScroll = true
+      try {
         lastHapticValue = value
         val currentBase = centerIndex - currentSelected
         val targetCenterIndex = currentBase + value
-        listState.animateScrollToItem((targetCenterIndex - 1).coerceAtLeast(0))
+        listState.scrollToItem((targetCenterIndex - 1).coerceAtLeast(0))
+      } finally {
+        isProgrammaticScroll = false
       }
     }
   }
